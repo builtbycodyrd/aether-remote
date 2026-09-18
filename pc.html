@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aether Remote — PC</title>
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-16.png" sizes="16x16">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#01020a; --primary:#7c3aed; --secondary:#22d3ee;
+    --accent2:color-mix(in srgb,var(--primary) 55%,#fff);
+    --panel:color-mix(in srgb,var(--primary) 7%,rgba(8,7,20,.8));
+    --line:color-mix(in srgb,var(--primary) 26%,transparent);
+    --line2:color-mix(in srgb,var(--primary) 48%,transparent);
+    --glow:color-mix(in srgb,var(--primary) 40%,transparent);
+    --text:#f1f0f7; --muted:#7c8598; --good:#34d399; --bad:#fb7185;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:14px/1.45 'Sora',system-ui,"Segoe UI",sans-serif;overflow:hidden}
+  body::before{content:"";position:fixed;inset:-20%;z-index:0;
+    background:radial-gradient(45vmax 45vmax at 12% 0%,color-mix(in srgb,var(--primary) 18%,transparent),transparent 60%),
+      radial-gradient(40vmax 40vmax at 95% 60%,color-mix(in srgb,var(--secondary) 8%,transparent),transparent 60%);
+    filter:blur(40px)}
+
+  .app{position:relative;z-index:1;display:grid;
+    grid-template-columns:210px 1fr 430px;height:100vh}
+
+  /* ---------- sidebar ---------- */
+  nav{border-right:1px solid var(--line);padding:18px 12px;display:flex;
+    flex-direction:column;gap:3px;background:rgba(4,3,12,.5)}
+  .brand{display:flex;align-items:center;gap:10px;padding:0 6px 18px}
+  .brand h1{font-size:15px;margin:0;font-weight:600;
+    background:linear-gradient(120deg,var(--accent2),var(--secondary));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .brand .s{font-size:10px;color:var(--muted)}
+  .nav{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;
+    cursor:pointer;color:#b9c2d0;font-size:13.5px;border:1px solid transparent}
+  .nav:hover{background:color-mix(in srgb,var(--primary) 12%,transparent)}
+  .nav.on{background:color-mix(in srgb,var(--primary) 22%,transparent);
+    border-color:var(--line);color:var(--text)}
+  .nav svg{opacity:.85;flex:0 0 auto}
+  nav .spacer{flex-grow:1}
+  .stat{font-size:11px;color:var(--muted);padding:6px 8px;line-height:1.6}
+  .stat b{color:var(--text);font-weight:500}
+
+  /* ---------- main ---------- */
+  main{overflow-y:auto;padding:24px 28px 40px}
+  h2{font-size:19px;margin:0 0 4px;font-weight:600}
+  .sub{font-size:12.5px;color:var(--muted);margin-bottom:20px;max-width:620px;
+    line-height:1.55}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:16px 18px;margin-bottom:14px}
+  .card h3{font-size:10.5px;letter-spacing:1.1px;text-transform:uppercase;
+    color:var(--accent2);margin:0 0 12px;font-weight:600}
+
+  .btn{border:1px solid var(--line);background:color-mix(in srgb,var(--primary) 10%,transparent);
+    color:var(--text);border-radius:9px;padding:9px 14px;font:inherit;font-size:13px;
+    cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  .btn:hover{background:color-mix(in srgb,var(--primary) 22%,transparent)}
+  .btn.pri{background:linear-gradient(140deg,var(--primary),
+      color-mix(in srgb,var(--secondary) 50%,var(--primary)));border-color:transparent;
+    font-weight:600;box-shadow:0 5px 16px var(--glow)}
+  .btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+  .btn.danger{border-color:color-mix(in srgb,var(--bad) 45%,transparent);
+    background:color-mix(in srgb,var(--bad) 12%,transparent);color:#fecdd3}
+  .btn:disabled{opacity:.4;cursor:default}
+
+  input,select,textarea{background:rgba(1,2,10,.6);border:1px solid var(--line);
+    color:var(--text);border-radius:9px;padding:9px 11px;font:inherit;font-size:13px;
+    outline:none}
+  input:focus,select:focus{border-color:var(--primary)}
+  input[type=color]{padding:2px;width:44px;height:34px;cursor:pointer}
+  label.row{display:flex;align-items:center;gap:12px;padding:10px 0;
+    border-bottom:1px solid var(--line)}
+  label.row:last-child{border-bottom:none}
+  label.row .t{flex-grow:1}
+  label.row .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;
+    color:var(--muted);font-weight:500;padding:0 10px 9px;position:sticky;top:0;
+    background:var(--bg)}
+  td{padding:7px 10px;border-top:1px solid var(--line);vertical-align:middle}
+  tr:hover td{background:color-mix(in srgb,var(--primary) 7%,transparent)}
+  .ic{width:34px;height:34px;border-radius:8px;object-fit:cover;
+    background:color-mix(in srgb,var(--primary) 18%,transparent);display:block}
+  .pill{font-size:10.5px;padding:2px 8px;border-radius:6px;
+    background:color-mix(in srgb,var(--primary) 18%,transparent);color:#cbd5e1}
+  .muted{color:var(--muted)}
+
+  /* ---------- live preview ---------- */
+  aside{border-left:1px solid var(--line);background:rgba(4,3,12,.5);
+    display:flex;flex-direction:column;align-items:center;padding:20px 0 16px;gap:12px}
+  .phone{width:390px;height:780px;border-radius:34px;overflow:hidden;
+    border:8px solid #15131f;box-shadow:0 22px 60px rgba(0,0,0,.65),
+      0 0 0 1px var(--line2);background:#000;flex:0 0 auto;position:relative}
+  .phone iframe{width:390px;height:764px;border:0;display:block}
+  .phone .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);
+    width:118px;height:20px;background:#15131f;border-radius:0 0 12px 12px;z-index:2}
+  .plabel{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .plabel .dot{width:6px;height:6px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 8px var(--good)}
+
+  .drop{border:2px dashed var(--line2);border-radius:12px;padding:22px;
+    text-align:center;color:var(--muted);font-size:12.5px;cursor:pointer}
+  .drop.over{border-color:var(--secondary);
+    background:color-mix(in srgb,var(--secondary) 9%,transparent);color:var(--text)}
+
+  .tilerow{display:flex;align-items:center;gap:10px;padding:8px 10px;
+    border:1px solid var(--line);border-radius:10px;margin-bottom:7px;
+    background:rgba(1,2,10,.35);cursor:grab}
+  .tilerow.drag{opacity:.45}
+  .tilerow .grip{color:var(--muted);cursor:grab;font-size:15px;line-height:1}
+  .tilerow .nm{flex-grow:1;font-size:13px}
+  .tilerow .kind{font-size:10.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.6px}
+
+  #toast{position:fixed;right:22px;bottom:20px;z-index:50;
+    background:rgba(10,8,28,.96);border:1px solid var(--line2);padding:11px 16px;
+    border-radius:10px;font-size:13px;transform:translateY(80px);opacity:0;
+    transition:transform .22s,opacity .22s;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+  #toast.show{transform:translateY(0);opacity:1}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <nav>
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 100 100">
+        <defs><radialGradient id="o" cx="38%" cy="34%">
+          <stop offset="0%" style="stop-color:var(--accent2)"/>
+          <stop offset="45%" style="stop-color:var(--primary)"/>
+          <stop offset="100%" style="stop-color:color-mix(in srgb,var(--primary) 25%,#000)"/>
+        </radialGradient></defs>
+        <circle cx="50" cy="50" r="30" fill="url(#o)"/>
+        <ellipse cx="50" cy="50" rx="44" ry="15" fill="none"
+          style="stroke:var(--secondary)" stroke-width="2" opacity=".7">
+          <animateTransform attributeName="transform" type="rotate"
+            from="0 50 50" to="360 50 50" dur="14s" repeatCount="indefinite"/>
+        </ellipse>
+      </svg>
+      <div><h1>Aether Remote</h1><div class="s" id="pcname">this PC</div></div>
+    </div>
+
+    <div class="nav on" data-view="library">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="11" rx="1"/></svg>
+      Library</div>
+    <div class="nav" data-view="layout">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/></svg>
+      Layout</div>
+    <div class="nav" data-view="scenes">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l1.9 5.8H20l-4.9 3.6 1.9 5.8L12 14.6 7 18.2l1.9-5.8L4 8.8h6.1z"/></svg>
+      Scenes</div>
+    <div class="nav" data-view="pair">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+      Phones</div>
+    <div class="nav" data-view="settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10.6 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings</div>
+
+    <div class="spacer"></div>
+    <div class="stat" id="sysstat">—</div>
+  </nav>
+
+  <main id="main"></main>
+
+  <aside>
+    <div class="plabel"><span class="dot"></span>Live phone preview</div>
+    <div class="phone"><div class="notch"></div><iframe id="pv" src="/"></iframe></div>
+    <button class="btn sm" id="reloadPv">Refresh preview</button>
+  </aside>
+</div>
+
+<div id="toast"></div>
+<script src="pc.js"></script>
+</body>
+</html>

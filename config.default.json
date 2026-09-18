@@ -1,0 +1,6 @@
+{
+  "_comment": "Copied to config.json on first run and never overwritten by an update. host: auto | tailscale | 0.0.0.0 - the setup wizard writes this. Launchers are optional: games and apps are found by the scanner, and anything else is added from the desktop app.",
+  "port": 8787,
+  "host": "auto",
+  "launchers": []
+}

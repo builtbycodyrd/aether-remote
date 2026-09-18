@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#01020a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Aether Remote</title>
+<!-- Added to the home screen this opens fullscreen with a real icon instead
+     of a Safari tab with a screenshot for an icon. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-16.png" sizes="16x16">
+<meta name="apple-mobile-web-app-title" content="Aether">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Only these three are set by the theme. Everything else is derived from
+       them with color-mix, so picking a new primary really does restyle the
+       whole app instead of just recolouring one button. */
+    --bg:#01020a; --primary:#7c3aed; --secondary:#22d3ee;
+
+    --accent:var(--primary);
+    --accent2:color-mix(in srgb, var(--primary) 55%, #ffffff);
+    --cyan:var(--secondary);
+    --panel:color-mix(in srgb, var(--primary) 9%, rgba(6,5,16,.72));
+    --line:color-mix(in srgb, var(--primary) 30%, transparent);
+    --line2:color-mix(in srgb, var(--primary) 52%, transparent);
+    --glow:color-mix(in srgb, var(--primary) 42%, transparent);
+    --text:#f1f0f7; --muted:#64748b;
+    --good:#34d399; --bad:#fb7185; --r:14px; --gap:8px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.4 'Sora',system-ui,-apple-system,"Segoe UI",sans-serif;
+    overscroll-behavior-y:none;-webkit-user-select:none;user-select:none}
+  body{min-height:100vh;position:relative;
+    padding:0 14px calc(env(safe-area-inset-bottom) + 28px);
+    /* This is a phone layout. On a wide screen it must NOT stretch - a
+       4-column grid across 1920px gives comically huge tiles. Cap it and
+       centre it; the desktop app at /pc is the real PC interface. */
+    max-width:460px;margin:0 auto}
+  @media (min-width:560px){
+    body{border-left:1px solid var(--line);border-right:1px solid var(--line)}
+  }
+  body.editing{-webkit-user-select:none}
+  body::before{content:"";position:fixed;inset:-25%;z-index:-2;
+    background:
+      radial-gradient(40vmax 40vmax at 18% 8%, color-mix(in srgb, var(--primary) 24%, transparent), transparent 62%),
+      radial-gradient(34vmax 34vmax at 88% 42%, color-mix(in srgb, var(--secondary) 12%, transparent), transparent 60%);
+    filter:blur(30px)}
+  body.noscan::after{display:none}
+  body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:repeating-linear-gradient(to bottom,
+      color-mix(in srgb, var(--secondary) 6%, transparent) 0 1px,transparent 1px 3px);
+    mix-blend-mode:screen;opacity:.45}
+
+  /* header */
+  header{display:flex;align-items:center;gap:10px;padding:14px 0 10px;
+    position:sticky;top:0;z-index:12;background:linear-gradient(to bottom,var(--bg) 72%,transparent);
+    padding-top:calc(env(safe-area-inset-top) + 12px)}
+  .orb{width:34px;height:34px;flex:0 0 auto}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px;
+    background:linear-gradient(120deg,var(--accent2),var(--secondary) 85%);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hsub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--good);
+    flex:0 0 auto;box-shadow:0 0 9px var(--good)}
+  .dot.off{background:var(--bad);box-shadow:0 0 9px var(--bad)}
+  .iconbtn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel);display:flex;align-items:center;justify-content:center;
+    flex:0 0 auto;cursor:pointer}
+  .iconbtn:active{background:color-mix(in srgb,var(--accent) 25%,transparent)}
+
+  /* jump rail */
+  #rail{position:sticky;top:calc(env(safe-area-inset-top) + 58px);z-index:11;
+    display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;
+    scrollbar-width:none;background:linear-gradient(to bottom,var(--bg) 70%,transparent)}
+  #rail::-webkit-scrollbar{display:none}
+  .chip{padding:6px 13px;border-radius:9px;font-size:12px;white-space:nowrap;
+    border:1px solid var(--line);color:#cbd5e1;background:var(--panel);cursor:pointer}
+  .chip.on{background:linear-gradient(140deg,var(--accent),color-mix(in srgb,var(--accent) 70%,#fff 12%));
+    border-color:transparent;color:#fff}
+
+  /* grid */
+  .sec{scroll-margin-top:110px}
+  .sechead{display:flex;align-items:center;gap:8px;margin:14px 0 9px}
+  .sechead .t{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;
+    color:var(--accent2);opacity:.8}
+  .sechead .l{flex-grow:1;height:1px;background:var(--line)}
+  .sechead .n{font-size:10px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+    grid-auto-rows:var(--cell);gap:var(--gap)}
+
+  .tile{position:relative;border-radius:var(--r);background:var(--panel);
+    border:1px solid var(--line);overflow:hidden;cursor:pointer;
+    display:flex;transition:transform .07s,background .15s,border-color .15s}
+  body.glass .tile{backdrop-filter:blur(18px) saturate(140%);
+    -webkit-backdrop-filter:blur(18px) saturate(140%)}
+  .tile:active{transform:scale(.96)}
+  .tile.on{background:linear-gradient(140deg,var(--primary),
+      color-mix(in srgb,var(--secondary) 55%,var(--primary)));
+    border-color:transparent;box-shadow:0 6px 20px var(--glow)}
+  .tile.danger{border-color:rgba(251,113,133,.45);background:rgba(251,113,133,.1)}
+  .tile.armed{background:linear-gradient(140deg,#9f1239,#e11d48);border-color:transparent;
+    animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.6}}
+  .tile.sent{border-color:var(--cyan)}
+  .tile.sent::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--cyan),transparent)}
+  .tile.dead{opacity:.42}
+
+  .ico{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:5px;width:100%;padding:6px}
+  .ico .lab{font-size:10px;color:#94a3b8;text-align:center;line-height:1.2;
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tile.on .lab{color:#fff}
+  .row{display:flex;align-items:center;gap:9px;padding:0 11px;width:100%}
+  .row .nm{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .row .sub{font-size:9px;color:var(--muted)}
+  .thumb{width:30px;height:30px;border-radius:8px;flex-shrink:0;object-fit:cover;
+    background:color-mix(in srgb,var(--primary) 22%,transparent)}
+
+  .game{width:100%;height:100%;position:relative}
+  .game img{width:100%;height:100%;object-fit:cover;display:block}
+  .game .fallback{width:100%;height:100%;display:flex;align-items:flex-end;
+    padding:9px;background:linear-gradient(165deg,
+      color-mix(in srgb,var(--primary) 45%,#000),var(--primary) 50%,
+      color-mix(in srgb,var(--secondary) 30%,#000))}
+  .game .cap{position:absolute;left:0;right:0;bottom:0;padding:22px 9px 8px;
+    background:linear-gradient(to top,color-mix(in srgb,var(--bg) 94%,transparent) 26%,transparent);
+    font-size:12px;font-weight:600;line-height:1.2}
+  body.nolabels .game .cap{display:none}
+  .badge{position:absolute;left:8px;top:8px;display:flex;align-items:center;gap:5px;
+    padding:3px 7px;border-radius:7px;background:color-mix(in srgb,var(--bg) 70%,transparent);font-size:9px;
+    color:#d1fae5}
+  .badge i{width:6px;height:6px;border-radius:50%;background:var(--good);display:block}
+
+  /* slider tile */
+  .slid{width:100%;padding:11px 13px;display:flex;flex-direction:column;
+    justify-content:center;gap:8px}
+  .slid .top{display:flex;align-items:baseline;gap:7px}
+  .slid .v{font-size:24px;font-weight:600;line-height:1;
+    background:linear-gradient(120deg,var(--accent2),var(--secondary));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .slid .u{font-size:11px;color:var(--muted)}
+  .slid .k{margin-left:auto;font-size:10px;letter-spacing:1px;
+    text-transform:uppercase;color:var(--accent2)}
+  input[type=range]{-webkit-appearance:none;width:100%;height:28px;background:transparent;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:5px;
+    background:linear-gradient(90deg,var(--primary),
+      color-mix(in srgb,var(--secondary) 45%,var(--primary)) var(--pct,50%),
+      color-mix(in srgb,var(--primary) 16%,transparent) var(--pct,50%))}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;
+    border-radius:50%;background:#f1f0f7;margin-top:-8px;
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 26%,transparent)}
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border:none;border-radius:50%;background:#f1f0f7}
+
+  /* stream tile */
+  .strm{width:100%;height:100%;position:relative;
+    background:linear-gradient(160deg,color-mix(in srgb,var(--primary) 12%,#05050c),color-mix(in srgb,var(--primary) 26%,#08060f) 60%,color-mix(in srgb,var(--secondary) 10%,#04070c))}
+  .strm img{width:100%;height:100%;object-fit:contain;display:block}
+  .strm .hint{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:4px;font-size:11px;color:#94a3b8}
+  .strm .live{position:absolute;left:11px;top:9px;display:flex;align-items:center;
+    gap:6px;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#cbd5e1}
+  .strm .live i{width:6px;height:6px;border-radius:50%;background:var(--bad);display:block}
+
+  /* stat tile */
+  .stat{width:100%;padding:0 13px;display:flex;align-items:center;gap:12px}
+  .stat .k{font-size:9px;color:var(--muted);letter-spacing:.6px}
+  .stat .v{font-size:16px;font-weight:600;color:var(--accent2)}
+  .bars{flex-grow:1;height:30px;display:flex;align-items:flex-end;gap:3px}
+  .bars i{flex-grow:1;background:color-mix(in srgb,var(--accent2) 45%,transparent);
+    border-radius:2px;display:block}
+
+  /* edit affordances */
+  .tile.edit{border-style:dashed;border-color:color-mix(in srgb,var(--secondary) 60%,transparent)}
+  /* The remove and resize handles used to sit at -7px, OUTSIDE a tile that
+     has overflow:hidden - so they were clipped and barely tappable. Keep them
+     inside, and give them a 40px hit area with a smaller visible dot. */
+  .tile.edit .rm{position:absolute;top:0;left:0;width:40px;height:40px;
+    display:flex;align-items:center;justify-content:center;z-index:5;
+    cursor:pointer;touch-action:none}
+  .tile.edit .rm::before{content:"";position:absolute;width:24px;height:24px;
+    border-radius:50%;background:var(--bad);box-shadow:0 2px 10px rgba(0,0,0,.7)}
+  .tile.edit .rm b{position:relative;width:11px;height:2.5px;background:#fff;
+    border-radius:2px;display:block;z-index:1}
+  .tile.edit .rm:active::before{transform:scale(.88)}
+  .tile.edit .rs{position:absolute;bottom:0;right:0;width:38px;height:38px;
+    z-index:5;cursor:nwse-resize;touch-action:none;
+    display:flex;align-items:flex-end;justify-content:flex-end;padding:5px}
+  .tile.edit .rs::before{content:"";width:20px;height:20px;border-radius:6px;
+    background:var(--accent2);border:2px solid var(--bg);
+    box-shadow:0 2px 8px rgba(0,0,0,.6)}
+  .tile.lift{box-shadow:0 20px 42px rgba(0,0,0,.75),0 0 0 3px color-mix(in srgb,var(--secondary) 24%,transparent);
+    transform:rotate(-2.5deg) scale(1.04);z-index:20;opacity:.95}
+  .slot{border-radius:var(--r);border:2px dashed color-mix(in srgb,var(--secondary) 65%,transparent);
+    background:color-mix(in srgb,var(--secondary) 9%,transparent)}
+
+  /* sheets */
+  .scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 62%,transparent);z-index:30;
+    opacity:0;pointer-events:none;transition:opacity .2s}
+  .scrim.show{opacity:1;pointer-events:auto}
+  .sheet{position:fixed;left:0;right:0;bottom:0;max-height:88vh;z-index:31;
+    background:color-mix(in srgb,var(--primary) 10%,color-mix(in srgb,var(--bg) 92%,#000));border:1px solid var(--line2);border-bottom:none;
+    border-radius:26px 26px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);
+    transform:translateY(102%);transition:transform .26s cubic-bezier(.2,.8,.2,1);
+    display:flex;flex-direction:column;
+    padding-bottom:calc(env(safe-area-inset-bottom) + 10px)}
+  .sheet.show{transform:translateY(0)}
+  /* The whole strip is the drag target, not just the visible pill - a 4px
+     handle is impossible to grab with a thumb. */
+  .grabzone{padding:9px 0 5px;cursor:grab;touch-action:none;flex:0 0 auto}
+  .grabzone:active{cursor:grabbing}
+  .grab{width:38px;height:4px;border-radius:2px;background:rgba(148,163,184,.35);
+    margin:0 auto;transition:width .15s,background .15s}
+  .grabzone:active .grab{width:52px;background:var(--accent2)}
+  .sheet.dragging{transition:none}
+  .sheet h2{font-size:17px;margin:13px 16px 0;font-weight:600;color:var(--accent2)}
+  .sheet .body{overflow-y:auto;padding:0 16px;flex-grow:1;-webkit-overflow-scrolling:touch}
+  .sheet .foot{padding:11px 16px 4px;border-top:1px solid var(--line);
+    display:flex;gap:9px;align-items:center}
+
+  .btn{border-radius:11px;padding:11px 16px;font-size:14px;font-weight:500;
+    border:1px solid var(--line);background:var(--panel);color:var(--text);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px}
+  .btn:active{transform:scale(.97)}
+  .btn.pri{background:linear-gradient(140deg,var(--primary),color-mix(in srgb,var(--secondary) 55%,var(--primary)));
+    border-color:transparent;color:#fff;font-weight:600;
+    box-shadow:0 6px 18px var(--glow)}
+  .btn.wide{width:100%}
+
+  .field{width:100%;background:color-mix(in srgb,var(--bg) 66%,transparent);border:1px solid var(--line);
+    border-radius:11px;padding:12px;font-size:14px;color:var(--text);
+    font-family:inherit;outline:none;-webkit-user-select:text;user-select:text}
+  .field:focus{border-color:var(--accent)}
+
+  .pick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .pick .c{border-radius:12px;overflow:hidden;position:relative;
+    border:1px solid var(--line);cursor:pointer;aspect-ratio:2/3;
+    background:linear-gradient(165deg,color-mix(in srgb,var(--primary) 35%,#000),var(--primary) 50%,color-mix(in srgb,var(--secondary) 25%,#000))}
+  .pick .c.sel{border:2px solid var(--accent2)}
+  .pick .c img{width:100%;height:100%;object-fit:cover;display:block}
+  .pick .c .cap{position:absolute;left:0;right:0;bottom:0;padding:16px 7px 7px;
+    background:linear-gradient(to top,color-mix(in srgb,var(--bg) 94%,transparent) 26%,transparent);
+    font-size:10px;font-weight:600;line-height:1.2}
+  .pick .c .tick{position:absolute;top:6px;right:6px;width:20px;height:20px;
+    border-radius:50%;background:var(--accent);display:none;
+    align-items:center;justify-content:center}
+  .pick .c.sel .tick{display:flex}
+
+  .list .it{display:flex;align-items:center;gap:11px;padding:11px 0;
+    border-bottom:1px solid var(--line);cursor:pointer}
+  .list .it .nm{flex-grow:1;font-size:13px;min-width:0;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .list .it .sub{font-size:10px;color:var(--muted)}
+  .list .it .ch{color:var(--muted);font-size:17px}
+
+  .srow{display:flex;align-items:center;gap:12px;padding:13px 0;
+    border-bottom:1px solid var(--line)}
+  .srow .t{font-size:13.5px}
+  .srow .d{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.4}
+  .sw{width:48px;height:28px;border-radius:14px;background:color-mix(in srgb,var(--primary) 18%,transparent);
+    border:1px solid var(--line);position:relative;flex:0 0 auto;cursor:pointer;
+    transition:background .18s}
+  .sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+    background:var(--muted);transition:left .18s,background .18s;display:block}
+  .sw.on{background:linear-gradient(140deg,var(--primary),color-mix(in srgb,var(--secondary) 55%,var(--primary)));
+    border-color:transparent}
+  .sw.on i{left:23px;background:#fff}
+
+  .swatch{width:32px;height:32px;border-radius:50%;cursor:pointer;flex:0 0 auto}
+  .swatch.sel{box-shadow:0 0 0 2px var(--text)}
+
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(110px);
+    background:color-mix(in srgb,var(--primary) 12%,color-mix(in srgb,var(--bg) 90%,#000));border:1px solid var(--line2);color:#fff;
+    padding:11px 18px;border-radius:22px;font-size:14px;z-index:60;
+    transition:transform .24s;max-width:88vw;text-align:center;
+    box-shadow:0 10px 34px rgba(0,0,0,.6)}
+  #toast.show{transform:translateX(-50%) translateY(0)}
+
+  #fab{position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom) + 18px);
+    z-index:25;display:flex;gap:9px}
+</style>
+</head>
+<body class="glass">
+
+<header>
+  <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">
+    <defs>
+      <radialGradient id="ob" cx="38%" cy="34%">
+        <stop offset="0%" style="stop-color:var(--accent2)"/>
+        <stop offset="40%" style="stop-color:var(--primary)"/>
+        <stop offset="100%" style="stop-color:color-mix(in srgb,var(--primary) 30%,#000)"/>
+      </radialGradient>
+    </defs>
+    <circle cx="50" cy="50" r="30" fill="url(#ob)">
+      <animate attributeName="r" values="30;32.5;30" dur="4.5s" repeatCount="indefinite"/>
+    </circle>
+    <ellipse cx="50" cy="50" rx="44" ry="15" fill="none" style="stroke:var(--secondary)" stroke-width="2" opacity=".72">
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50"
+        dur="11s" repeatCount="indefinite"/>
+    </ellipse>
+  </svg>
+  <div style="flex-grow:1;min-width:0">
+    <h1 id="title">Aether Remote</h1>
+    <div class="hsub" id="meta">connecting…</div>
+  </div>
+  <div class="dot" id="dot"></div>
+  <button class="iconbtn" id="editBtn" aria-label="Edit layout">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+  </button>
+  <button class="iconbtn" id="setBtn" aria-label="Settings">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10.6 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+</header>
+
+<div id="rail"></div>
+<main id="board"></main>
+
+<div id="fab"></div>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet">
+  <div class="grabzone" id="grabzone"><div class="grab"></div></div>
+  <h2 id="sheetTitle">Sheet</h2>
+  <div class="body" id="sheetBody"></div>
+  <div class="foot" id="sheetFoot"></div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

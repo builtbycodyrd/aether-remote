@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#01020a">
+<title>Aether Remote</title>
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<link rel="icon" href="/static/icon-16.png" sizes="16x16">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<style>
+  :root{
+    --bg:#01020a; --panel:rgba(10,8,28,.62); --line:rgba(124,58,237,.22);
+    --purple:#7c3aed; --violet:#6d28d9; --lavender:#a78bfa; --pink:#c084fc;
+    --cyan:#22d3ee; --text:#f1f0f7; --muted:#64748b; --r:12px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  body{display:flex;align-items:center;justify-content:center;
+    padding:24px;overflow:hidden}
+  /* ambient wash */
+  body::before{content:"";position:fixed;inset:-20%;z-index:0;
+    background:
+      radial-gradient(38vmax 38vmax at 22% 18%, rgba(124,58,237,.22), transparent 62%),
+      radial-gradient(32vmax 32vmax at 82% 78%, rgba(34,211,238,.10), transparent 60%);
+    filter:blur(28px)}
+  /* scan lines */
+  body::after{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;
+    background:repeating-linear-gradient(to bottom,
+      rgba(34,211,238,.035) 0 1px, transparent 1px 3px);
+    mix-blend-mode:screen;opacity:.5}
+
+  .card{position:relative;z-index:2;width:100%;max-width:360px;text-align:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:20px;
+    padding:34px 26px 28px;backdrop-filter:blur(18px) saturate(140%);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);
+    box-shadow:0 24px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(124,58,237,.06) inset}
+
+  .orb{width:86px;height:86px;margin:0 auto 18px;display:block}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:.3px;
+    background:linear-gradient(120deg,#c4b5fd,#a78bfa 45%,#818cf8);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 2px 10px rgba(109,40,217,.45))}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:24px}
+
+  input{width:100%;background:rgba(1,2,10,.6);border:1px solid var(--line);
+    color:var(--text);border-radius:var(--r);padding:17px 14px;font-size:30px;
+    text-align:center;letter-spacing:.42em;text-indent:.42em;
+    font-variant-numeric:tabular-nums;outline:none;transition:border-color .16s,box-shadow .16s}
+  input:focus{border-color:var(--purple);
+    box-shadow:0 0 0 4px rgba(124,58,237,.16)}
+  input::placeholder{color:#2c3242;letter-spacing:.3em}
+
+  button{width:100%;margin-top:14px;border:none;border-radius:var(--r);
+    padding:16px;font-size:16px;font-weight:600;color:#fff;cursor:pointer;
+    background:linear-gradient(120deg,var(--violet),var(--purple) 60%,#8b5cf6);
+    box-shadow:0 8px 26px rgba(109,40,217,.42);transition:transform .07s,opacity .15s}
+  button:active{transform:scale(.975)}
+  button:disabled{opacity:.5}
+
+  .err{min-height:20px;margin-top:13px;font-size:13px;color:#fda4af}
+  .foot{margin-top:20px;font-size:11.5px;color:var(--muted);line-height:1.5}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">
+    <defs>
+      <radialGradient id="core" cx="38%" cy="34%">
+        <stop offset="0%"  stop-color="#e9d5ff"/>
+        <stop offset="38%" stop-color="#a78bfa"/>
+        <stop offset="78%" stop-color="#6d28d9"/>
+        <stop offset="100%" stop-color="#2e1065"/>
+      </radialGradient>
+      <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#22d3ee" stop-opacity=".9"/>
+        <stop offset="60%" stop-color="#c084fc" stop-opacity=".35"/>
+        <stop offset="100%" stop-color="#7c3aed" stop-opacity=".8"/>
+      </linearGradient>
+      <filter id="glow"><feGaussianBlur stdDeviation="2.4" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <circle cx="50" cy="50" r="31" fill="url(#core)" filter="url(#glow)">
+      <animate attributeName="r" values="31;33;31" dur="4.5s" repeatCount="indefinite"/>
+    </circle>
+    <ellipse cx="50" cy="50" rx="44" ry="15" fill="none"
+             stroke="url(#ring)" stroke-width="1.6" opacity=".85">
+      <animateTransform attributeName="transform" type="rotate"
+        from="0 50 50" to="360 50 50" dur="11s" repeatCount="indefinite"/>
+    </ellipse>
+    <ellipse cx="50" cy="50" rx="44" ry="15" fill="none"
+             stroke="url(#ring)" stroke-width="1.2" opacity=".5">
+      <animateTransform attributeName="transform" type="rotate"
+        from="60 50 50" to="420 50 50" dur="16s" repeatCount="indefinite"/>
+    </ellipse>
+  </svg>
+
+  <h1>Aether Remote</h1>
+  <div class="sub">{{PC}}</div>
+
+  <form id="f" autocomplete="off">
+    <input id="code" type="text" inputmode="numeric" pattern="[0-9]*"
+           maxlength="6" placeholder="000000" autocomplete="one-time-code"
+           autofocus>
+    <button id="go" type="submit">Unlock</button>
+  </form>
+  <div class="err" id="err"></div>
+  <div class="foot">6-digit code from your authenticator app.<br>
+    This device stays unlocked for 30 days.</div>
+</div>
+
+<script>
+const code = document.getElementById('code');
+const err  = document.getElementById('err');
+const go   = document.getElementById('go');
+
+async function submit(){
+  const v = code.value.trim();
+  if (v.length !== 6) { err.textContent = 'Enter all 6 digits.'; return; }
+  go.disabled = true; err.textContent = '';
+  try {
+    const r = await fetch('/api/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({code:v})
+    });
+    const j = await r.json().catch(()=>({}));
+    if (r.ok) { location.href = '/'; return; }
+    err.textContent = j.error || 'Login failed.';
+  } catch(e){
+    err.textContent = 'Cannot reach the PC.';
+  }
+  go.disabled = false;
+  code.value = ''; code.focus();
+}
+
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault(); submit();
+});
+// autosubmit the moment 6 digits are in - no extra tap needed
+code.addEventListener('input', () => {
+  code.value = code.value.replace(/\D/g,'').slice(0,6);
+  if (code.value.length === 6) submit();
+});
+</script>
+</body>
+</html>

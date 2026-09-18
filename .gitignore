@@ -1,0 +1,57 @@
+# Anything an install creates belongs to that install, not to the project.
+# This repo is public, so the rule is simple: if the app wrote it, it does
+# not get committed.
+
+# --- secrets. never, under any circumstances ---------------------------------
+auth.json
+*.key
+*.pem
+.git-credentials
+
+# --- this install's state ----------------------------------------------------
+# NOTE: no trailing comments on these lines. In .gitignore a '#' only starts a
+# comment at the beginning of a line, so "config.json  # ships as default"
+# becomes a pattern that matches nothing - which is exactly how config.json
+# got staged the first time.
+# config.default.json is the one that ships.
+config.json
+artcache.json
+layout.json
+setup.json
+bound.json
+tray.json
+custom_apps.json
+custom_art.json
+remote.pid
+pair-qr.png
+last-message.txt
+
+# --- generated at runtime ----------------------------------------------------
+icons/
+art/
+*.log
+firewall-before.txt
+
+# --- build output ------------------------------------------------------------
+.venv/
+venv/
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec.bak
+
+# --- local tooling, not the product -----------------------------------------
+# These reference one particular machine's paths and are of no use to anyone
+# else. Kept out rather than cleaned up, because they are scaffolding.
+diag/
+remote.ps1
+verify.ps1
+*.retired
+*.bak
+
+# --- editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
