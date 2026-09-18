@@ -70,10 +70,25 @@ handful of games Steam has no box art for.
 <img src="docs/setup-network.jpg" width="620" alt="Choosing how the phone reaches the PC">
 </div>
 
-> Windows SmartScreen will warn you on first run, because the installer is not
-> code-signed (a certificate costs a few hundred dollars a year). Click
-> **More info → Run anyway**. The source is all here if you would rather read
-> it or build it yourself.
+### If Windows or your antivirus objects
+
+Both warnings come from the same cause: this app is **not code-signed**,
+because a certificate costs a few hundred dollars a year.
+
+**SmartScreen — "Windows protected your PC."** Click *More info → Run anyway*.
+Every unsigned installer gets this.
+
+**Defender — "Trojan:Win32/Wacatac.B!ml."** A false positive. The `!ml` suffix
+means a machine-learning guess rather than a match against known malware. The
+installer is one file that unpacks itself into a temp folder and runs from
+there — which is exactly what a dropper does — so a brand-new unsigned file
+of that shape gets flagged until it has a download history. The
+**portable zip** on the releases page has nothing self-extracting in it, so
+that heuristic has nothing to trigger on.
+
+Rather than take anyone's word for it: the source is all here, the build is
+one command, and every release lists the SHA-256 of both downloads so you can
+check that what you got is what was built.
 
 ### Reaching it from outside the house
 

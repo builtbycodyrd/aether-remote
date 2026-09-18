@@ -55,4 +55,5 @@ exe = EXE(
     onefile=True,
     console=False,
     icon=os.path.join(HERE, "aether.ico"),
+    version=os.path.join(HERE, "version-setup.txt"),
 )

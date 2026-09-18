@@ -69,6 +69,9 @@ exe = EXE(
     # background processes. A console would flash up on every restart.
     console=False,
     icon=os.path.join(HERE, "aether.ico"),
+    # Company, product and version in the file's properties. A binary with
+    # none of that reads as anonymous to both people and heuristics.
+    version=os.path.join(HERE, "version-app.txt"),
 )
 
 coll = COLLECT(
