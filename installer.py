@@ -226,7 +226,14 @@ def elevate_setup(log):
     return True
 
 
-def install(log, make_desktop=True):
+def install(log, make_desktop=True, admin=True, start=True):
+    """Install.
+
+    admin=False installs the files and shortcuts but skips the firewall rule
+    and the startup task. Useful to anyone who does not want to grant admin -
+    the app still runs, it just will not start by itself - and it is how this
+    gets tested without a UAC prompt.
+    """
     exe = copy_program(log)
 
     start_menu = os.path.join(
@@ -238,17 +245,24 @@ def install(log, make_desktop=True):
         shortcut(desktop, exe, log, desc="Control this PC from your phone")
 
     register_uninstall(exe, log, place_uninstaller(log))
-    elevated = elevate_setup(log)
 
-    # Start it now. If the task was registered it may already be starting,
-    # and the tray's own singleton mutex keeps that from becoming two copies.
-    log("starting %s" % APP)
-    try:
-        subprocess.Popen([exe], cwd=TARGET, creationflags=CREATE_NO_WINDOW,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
-    except Exception as e:
-        log("could not start it: %s" % e)
+    elevated = False
+    if admin:
+        elevated = elevate_setup(log)
+    else:
+        log("skipping the firewall rule and startup task (--no-admin)")
+
+    if start:
+        # If the task was registered it may already be starting, and the
+        # tray's singleton mutex keeps that from becoming two copies.
+        log("starting %s" % APP)
+        try:
+            subprocess.Popen([exe], cwd=TARGET, creationflags=CREATE_NO_WINDOW,
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except Exception as e:
+            log("could not start it: %s" % e)
 
     return exe, elevated
 
@@ -420,7 +434,7 @@ def gui(mode):
     root.mainloop()
 
 
-def silent(mode):
+def silent(mode, admin=True, start=True):
     def log(msg):
         try:
             if sys.stdout is not None:
@@ -436,7 +450,7 @@ def silent(mode):
             pass
 
     if mode == "install":
-        install(log)
+        install(log, admin=admin, start=start)
     else:
         uninstall(log)
     return 0
@@ -447,9 +461,11 @@ def main():
     mode = "uninstall" if "--uninstall" in args or "/uninstall" in args \
         else "install"
     quiet = "--quiet" in args or "/s" in args or "/silent" in args
+    admin = "--no-admin" not in args
+    start = "--no-start" not in args
 
     if quiet:
-        return silent(mode)
+        return silent(mode, admin=admin, start=start)
     gui(mode)
     return 0
 
