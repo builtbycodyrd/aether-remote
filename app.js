@@ -1236,6 +1236,9 @@ $('#setBtn').addEventListener('click', openSettings);
 const FS = {
   on: false, mon: 0, frames: 0, fpsTimer: null,
   barTimer: null, seenHint: false, sent: '',
+  // gen bumps on every start/stop so an in-flight frame from the last feed
+  // cannot paint over the new one; url is the object URL currently shown.
+  gen: 0, url: null, times: [], adapted: false,
 };
 
 function fsq(id){ return document.getElementById(id); }
@@ -1275,6 +1278,7 @@ function openDesktop(tile){
   if (!fs) return;
   FS.mon = +((tile && tile.ref) || 0);
   FS.on = true;
+  FS.adapted = false;        // judge this connection afresh each time
   fs.classList.add('on');
 
   const sel = fsq('fsMon');
@@ -1318,25 +1322,109 @@ function closeDesktop(){
           screen.orientation.unlock(); } catch(e){}
 }
 
+/* ---------- the feed ----------
+ * One frame at a time, each requested only after the last one has been
+ * painted. This replaced an MJPEG <img src="/api/stream">, which looked
+ * simpler and was the reason the preview felt laggy: the server pushes
+ * frames whether or not the phone can keep up, so on a connection slower
+ * than the stream they pile up in buffers and what you are watching drifts
+ * further and further behind the real screen - and tapping a thing you can
+ * see is useless if that thing moved two seconds ago.
+ *
+ * Asking for the next frame only when the last one is on screen cannot fall
+ * behind: the round trip IS the frame rate, so the picture is always the
+ * newest one, and a slow link costs frame rate instead of latency.
+ */
+const FPS = { low: 12, medium: 18, high: 24 };
+
 function fsStartFeed(){
-  const feed = fsq('fsFeed');
-  const mon = fsq('fsMon').value || 0;
-  const q = fsq('fsQ').value || 'medium';
-  feed.src = `/api/stream?mon=${mon}&q=${q}&t=${Date.now()}`;
+  fsStopFeed();
+  const gen = ++FS.gen;
   FS.frames = 0;
-  clearInterval(FS.fpsTimer);
+  FS.times = [];
   FS.fpsTimer = setInterval(() => {
     const s = fsq('fsStat');
-    if (s) s.textContent = FS.frames + ' fps';
+    if (s){
+      const ms = FS.times.length
+        ? Math.round(FS.times.reduce((a, b) => a + b, 0) / FS.times.length) : 0;
+      s.textContent = FS.frames + ' fps' + (ms ? ' · ' + ms + ' ms' : '');
+    }
     FS.frames = 0;
   }, 1000);
-  feed.onload = () => { FS.frames++; };
+  fsFeedLoop(gen);
 }
 
 function fsStopFeed(){
-  const feed = fsq('fsFeed');
-  if (feed) feed.src = '';
+  FS.gen++;
   clearInterval(FS.fpsTimer);
+  const feed = fsq('fsFeed');
+  if (feed) feed.removeAttribute('src');
+  if (FS.url){ URL.revokeObjectURL(FS.url); FS.url = null; }
+}
+
+const fsWait = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function fsFeedLoop(gen){
+  const feed = fsq('fsFeed');
+  let misses = 0;
+
+  while (FS.on && gen === FS.gen){
+    const t0 = performance.now();
+    const mon = fsq('fsMon').value || 0;
+    const q = fsq('fsQ').value || 'medium';
+    let url = null;
+    try {
+      const r = await fetch(`/api/frame?mon=${mon}&q=${q}&t=${Date.now()}`,
+                            { cache: 'no-store' });
+      if (r.status === 401){ location.href = '/login'; return; }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      url = URL.createObjectURL(await r.blob());
+    } catch(e){
+      misses++;
+      if (gen !== FS.gen) return;
+      if (misses === 3) fsToast('Lost the connection to the PC…', 2500);
+      await fsWait(Math.min(400 * misses, 2000));
+      continue;
+    }
+    if (gen !== FS.gen){ URL.revokeObjectURL(url); return; }
+    misses = 0;
+
+    // Swap only once the new frame has decoded, so the picture never blanks.
+    await new Promise(done => {
+      feed.onload = feed.onerror = done;
+      feed.src = url;
+    });
+    if (FS.url) URL.revokeObjectURL(FS.url);
+    FS.url = url;
+
+    const took = performance.now() - t0;
+    FS.frames++;
+    FS.times.push(took);
+    if (FS.times.length > 12) FS.times.shift();
+    fsAdapt();
+
+    // Do not ask faster than the tier's frame rate; a fast link should not
+    // sit at 60 requests a second warming the PC up for no visible gain.
+    const left = 1000 / (FPS[q] || 18) - took;
+    if (left > 4) await fsWait(left);
+  }
+}
+
+/* A slow link should cost frame rate, not usability. If frames are taking
+   long enough that the picture feels dead, drop a tier - once, and say so,
+   because silently changing what someone is looking at is worse than lag. */
+function fsAdapt(){
+  if (FS.adapted || FS.times.length < 8) return;
+  const sorted = [...FS.times].sort((a, b) => a - b);
+  const median = sorted[sorted.length >> 1];
+  if (median < 330) return;
+  const sel = fsq('fsQ');
+  const next = { high: 'medium', medium: 'low' }[sel.value];
+  if (!next) return;
+  FS.adapted = true;
+  sel.value = next;
+  FS.times = [];
+  fsToast('Connection is slow — dropped to ' + next + ' quality', 2600);
 }
 
 function fsMon(){ return +(fsq('fsMon').value || 0); }
@@ -1380,7 +1468,8 @@ function fsRing(px, py){
   let longT = null, moved = false, start = null, scrollY = null;
   let lastTap = 0, lastTapX = 0, lastTapY = 0;
 
-  const onChrome = t => t.closest('#fsBar') || t.closest('#fsDock');
+  const onChrome = t => t.closest('#fsBar') || t.closest('#fsDock')
+                     || t.closest('#fsExit');
 
   fs.addEventListener('pointerdown', e => {
     if (onChrome(e.target)) return;         // let the toolbars work normally
@@ -1601,9 +1690,14 @@ function fsEnterKey(){
   const bar = fsq('fsBar'), dock = fsq('fsDock');
   if (!bar || !dock) return;
 
-  fsq('fsClose').onclick = closeDesktop;
+  fsq('fsExit').onclick = closeDesktop;
+  fsq('fsExit').addEventListener('pointerdown', e => e.stopPropagation());
   fsq('fsMon').onchange = fsStartFeed;
-  fsq('fsQ').onchange = fsStartFeed;
+  fsq('fsQ').onchange = () => {
+    // Choosing a quality by hand means we stop second-guessing it.
+    FS.adapted = true;
+    fsStartFeed();
+  };
 
   // Right click where the cursor already is - which, after a tap, is where
   // you last tapped. /api/tap clicks in place instead of re-positioning.

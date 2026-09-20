@@ -502,11 +502,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(mon, quality)
 
             if path == "/api/frame":
+                # The full-screen viewer's feed: one frame per request, asked
+                # for again only once the last one is on screen. See the note
+                # in app.js - it is why the picture cannot fall behind.
                 mon = int(qs.get("mon", ["0"])[0])
                 q = stream.QUALITY.get(qs.get("q", ["medium"])[0],
                                        stream.QUALITY["medium"])
                 data = stream.grab_jpeg(mon, q["width"], q["jpeg"])
-                return self._send(200, data, "image/jpeg")
+                return self._send(200, data, "image/jpeg",
+                                  {"Cache-Control": "no-store"})
 
             if path == "/api/layout":
                 return self._send(200, layout.load(library_items()))

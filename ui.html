@@ -189,10 +189,23 @@
     transform:translate(-50%,-50%) scale(.4);
     box-shadow:0 0 16px var(--secondary)}
   #fsBar{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;
-    gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 10px;
+    gap:8px;padding:calc(8px + env(safe-area-inset-top)) 104px 10px 12px;
     background:linear-gradient(180deg,rgba(2,2,8,.92),rgba(2,2,8,0));
     transition:opacity .25s,transform .25s}
   #fsBar.hide{opacity:0;transform:translateY(-100%);pointer-events:none}
+
+  /* The way out. Never hidden, never faded, never behind anything - being
+     stuck inside a full-screen view with no visible exit is the worst thing
+     this screen can do to you. */
+  #fsExit{position:absolute;z-index:6;
+    top:calc(8px + env(safe-area-inset-top));right:10px;
+    display:flex;align-items:center;gap:7px;
+    border:1px solid var(--line2);border-radius:10px;
+    background:rgba(8,7,20,.88);backdrop-filter:blur(8px);
+    color:var(--text);font:inherit;font-size:13px;padding:9px 13px;
+    cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+  #fsExit:active{background:var(--primary);border-color:transparent}
+  #fsExit svg{display:block}
 
   /* The dock stays put. The top bar can fade away because it only holds
      settings; this holds the keyboard and the keys a phone cannot send, and
@@ -418,8 +431,15 @@
   <img id="fsFeed" alt="">
   <div id="fsRing"></div>
 
+  <button id="fsExit" aria-label="Leave the desktop view">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+      <path d="M5 5l14 14M19 5L5 19"/>
+    </svg>
+    Exit
+  </button>
+
   <div id="fsBar">
-    <button class="fsb" id="fsClose">Done</button>
     <select class="fsb" id="fsMon" aria-label="Monitor"></select>
     <select class="fsb" id="fsQ" aria-label="Quality">
       <option value="low">Low</option>

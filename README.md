@@ -148,9 +148,21 @@ There is no wrapper library here; it is `ctypes` against the Win32 API.
 
 ### Streaming the desktop
 
-The screen is sent as MJPEG over `multipart/x-mixed-replace`, which means the
-phone renders it in a plain `<img>` tag — no websocket, no player, no
-buffering layer. Around 13 fps at medium quality, about 94 kB/s at low.
+Capture is `StretchBlt` straight from the display DC into a scaled bitmap
+that is reused between frames, then `GetDIBits` into a buffer Pillow reads as
+BGRX with no conversion pass. That replaced `ImageGrab.grab` plus a Pillow
+resize — 70 ms a frame, measured — with about 27 ms.
+
+The phone asks for **one frame at a time**, and only once the last one is on
+screen. The obvious design is MJPEG over `multipart/x-mixed-replace`, and
+that is what this used to do; the problem is that the server pushes frames
+whether or not the phone can keep up, so on any connection slower than the
+stream they queue in buffers and the picture drifts steadily behind the real
+screen. Tapping something you can see is useless if it moved two seconds ago.
+A request-per-frame loop cannot fall behind — the round trip *is* the frame
+rate — so a slow link costs frame rate instead of latency, and the picture is
+always the newest one. If frames start taking long enough to feel dead, the
+phone drops a quality tier by itself and says so.
 
 Touches are sent as coordinates normalised 0–1 within the chosen monitor, so
 the phone never needs to know the resolution. They arrive as `SetCursorPos`

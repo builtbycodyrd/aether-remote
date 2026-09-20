@@ -26,7 +26,7 @@ except Exception:
     except Exception:
         pass
 
-from PIL import ImageGrab  # noqa: E402
+from PIL import Image, ImageGrab  # noqa: E402
 
 
 # ------------------------------------------------------------------ monitors
@@ -86,21 +86,212 @@ def monitor(mon_id):
 # ------------------------------------------------------------------- capture
 
 QUALITY = {
-    "low":    {"width": 800,  "jpeg": 40, "fps": 10},
-    "medium": {"width": 1280, "jpeg": 55, "fps": 15},
-    "high":   {"width": 1600, "jpeg": 65, "fps": 20},
+    "low":    {"width": 720,  "jpeg": 42, "fps": 12},
+    "medium": {"width": 1000, "jpeg": 55, "fps": 18},
+    "high":   {"width": 1440, "jpeg": 66, "fps": 24},
 }
 
+# ---- GDI capture ------------------------------------------------------------
+# ImageGrab.grab was measured at ~50ms for one 1920x1080 frame on this machine,
+# and scaling it down afterwards cost another 14-21ms. Both are avoidable:
+# StretchBlt copies the screen into an already-scaled bitmap in one step, on
+# a DC and a bitmap that are reused between frames.
+#
+# Falls back to ImageGrab if any of it fails, because a slow preview beats no
+# preview.
 
-def grab_jpeg(mon_id=0, width=1280, jpeg=55):
-    m = monitor(mon_id)
-    box = (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
-    img = ImageGrab.grab(bbox=box, all_screens=True)
-    img = img.convert("RGB")
-    if img.size[0] > width:
-        img.thumbnail((width, width * 4))
+gdi32 = ctypes.windll.gdi32
+
+SRCCOPY = 0x00CC0020
+CAPTUREBLT = 0x40000000        # include layered windows
+COLORONCOLOR = 3               # StretchBlt: drop pixels
+HALFTONE = 4                   # StretchBlt: averages pixels; the good one
+DIB_RGB_COLORS = 0
+
+# How the full-resolution screen becomes a small frame. Measured on the same
+# screen content by diag/capbench3.py, 1920x1080 -> 1000 wide, quality 55:
+#
+#   StretchBlt HALFTONE      21 ms   26 kB
+#   StretchBlt COLORONCOLOR  14 ms   27 kB   <- faster, but aliased and no
+#                                               smaller, so nothing is gained
+#   BitBlt + Pillow BILINEAR 33 ms   23 kB   <- 12% fewer bytes for 12ms more
+#
+# HALFTONE wins: GDI does the scaling in one step, and it compresses as well
+# as a proper resample. Flip SCALE_IN_PIL if a future machine disagrees -
+# the benchmark measures all three.
+SCALE_IN_PIL = False
+
+
+class BITMAPINFOHEADER(Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", c_long), ("biHeight", c_long),
+                ("biPlanes", c_ushort), ("biBitCount", c_ushort),
+                ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                ("biXPelsPerMeter", c_long), ("biYPelsPerMeter", c_long),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+
+class BITMAPINFO(Structure):
+    _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wt.DWORD * 3)]
+
+
+# Handles are pointer-sized. Left to ctypes' default c_int these truncate on
+# 64-bit Windows and the calls fail in ways that look like a black screen.
+for _fn, _args, _res in (
+    (gdi32.CreateCompatibleDC, [wt.HDC], wt.HDC),
+    (gdi32.CreateCompatibleBitmap, [wt.HDC, c_int, c_int], wt.HBITMAP),
+    (gdi32.SelectObject, [wt.HDC, wt.HGDIOBJ], wt.HGDIOBJ),
+    (gdi32.DeleteObject, [wt.HGDIOBJ], wt.BOOL),
+    (gdi32.DeleteDC, [wt.HDC], wt.BOOL),
+    (gdi32.SetStretchBltMode, [wt.HDC, c_int], c_int),
+    (gdi32.StretchBlt, [wt.HDC, c_int, c_int, c_int, c_int,
+                        wt.HDC, c_int, c_int, c_int, c_int, wt.DWORD], wt.BOOL),
+    (gdi32.GetDIBits, [wt.HDC, wt.HBITMAP, c_uint, c_uint, ctypes.c_void_p,
+                       POINTER(BITMAPINFO), c_uint], c_int),
+    (gdi32.CreateDCW, [wt.LPCWSTR, wt.LPCWSTR, wt.LPCWSTR, ctypes.c_void_p],
+     wt.HDC),
+):
+    _fn.argtypes, _fn.restype = _args, _res
+
+
+class _Grabber:
+    """Keeps the screen DC and the scratch bitmap alive between frames."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.screen = None
+        self.size = None
+        self.mem = self.bmp = self.old = None
+        self.buf = None
+        self.info = None
+        self.broken = False
+        # Overridable so diag/capbench3.py can measure the alternatives
+        # rather than take the comment above on trust.
+        self.pil_scale = SCALE_IN_PIL
+        self.stretch = HALFTONE
+
+    def _screen_dc(self):
+        if self.screen is None:
+            # "DISPLAY" spans the whole virtual desktop, so source coordinates
+            # are virtual-screen coordinates and a second monitor works.
+            self.screen = gdi32.CreateDCW("DISPLAY", None, None, None)
+        return self.screen
+
+    def _target(self, w, h):
+        if self.size == (w, h):
+            return
+        self._drop_target()
+        src = self._screen_dc()
+        self.mem = gdi32.CreateCompatibleDC(src)
+        self.bmp = gdi32.CreateCompatibleBitmap(src, w, h)
+        self.old = gdi32.SelectObject(self.mem, self.bmp)
+        gdi32.SetStretchBltMode(self.mem, self.stretch)
+        self.buf = ctypes.create_string_buffer(w * h * 4)
+        self.info = BITMAPINFO()
+        hdr = self.info.bmiHeader
+        hdr.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        hdr.biWidth = w
+        hdr.biHeight = -h                # negative = top-down rows
+        hdr.biPlanes = 1
+        hdr.biBitCount = 32
+        hdr.biCompression = 0            # BI_RGB
+        self.size = (w, h)
+
+    def _drop_target(self):
+        try:
+            if self.mem and self.old:
+                gdi32.SelectObject(self.mem, self.old)
+            if self.bmp:
+                gdi32.DeleteObject(self.bmp)
+            if self.mem:
+                gdi32.DeleteDC(self.mem)
+        except Exception:
+            pass
+        self.mem = self.bmp = self.old = self.buf = self.info = None
+        self.size = None
+
+    def frame(self, m, w, h):
+        """One RGB image of monitor `m`, already scaled to w x h."""
+        if self.broken:
+            return self._fallback(m, w, h)
+        try:
+            with self.lock:
+                src = self._screen_dc()
+                if not src:
+                    raise RuntimeError("no screen DC")
+                # Blit at full resolution and let Pillow do the scaling, so
+                # the result is a clean resample rather than GDI's dither.
+                bw, bh = (m["w"], m["h"]) if self.pil_scale else (w, h)
+                self._target(bw, bh)
+                if not gdi32.StretchBlt(self.mem, 0, 0, bw, bh,
+                                        src, m["x"], m["y"], m["w"], m["h"],
+                                        SRCCOPY | CAPTUREBLT):
+                    raise RuntimeError("StretchBlt failed")
+                if not gdi32.GetDIBits(self.mem, self.bmp, 0, bh, self.buf,
+                                       byref(self.info), DIB_RGB_COLORS):
+                    raise RuntimeError("GetDIBits failed")
+                # BGRX straight out of the DIB - no conversion pass.
+                img = Image.frombuffer("RGB", (bw, bh), self.buf,
+                                       "raw", "BGRX", 0, 1)
+                if (bw, bh) != (w, h):
+                    # An exact halving is much cheaper than a general resample,
+                    # so get most of the way there with reduce() first.
+                    f = min(bw // w, bh // h) if w and h else 1
+                    if f >= 2:
+                        img = img.reduce(f)
+                    img = img.resize((w, h), Image.BILINEAR)
+                return img
+        except Exception:
+            self.broken = True
+            self._drop_target()
+            try:
+                if self.screen:
+                    gdi32.DeleteDC(self.screen)
+            except Exception:
+                pass
+            self.screen = None
+            return self._fallback(m, w, h)
+
+    @staticmethod
+    def _fallback(m, w, h):
+        box = (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
+        img = ImageGrab.grab(bbox=box, all_screens=True)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.size != (w, h):
+            img = img.resize((w, h), Image.BILINEAR)
+        return img
+
+
+_grabber = _Grabber()
+
+
+def frame_size(m, width):
+    """The size a frame of monitor `m` gets scaled to.
+
+    `width` bounds the LONG edge, not the horizontal one. A portrait monitor
+    is 1080x1920, and capping its width at 1000 would send a 1000x1778 frame -
+    nearly twice the pixels of the landscape screen it was meant to match.
+
+    Even numbers, because JPEG chroma subsampling halves them and an odd
+    width costs a padding column.
+    """
+    w, h = m["w"], m["h"]
+    longest = max(w, h)
+    if longest > width:
+        scale = width / float(longest)
+        w = max(2, round(w * scale))
+        h = max(2, round(h * scale))
+    return (w - (w % 2), h - (h % 2))
+
+
+def grab_jpeg(mon_id=0, width=1280, jpeg=55, mon=None):
+    m = mon or monitor(mon_id)
+    w, h = frame_size(m, width)
+    img = _grabber.frame(m, w, h)
     buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=jpeg)
+    # subsampling=2 is 4:2:0. optimize=False skips a second Huffman pass that
+    # costs more time than the bytes it saves at these sizes.
+    img.save(buf, "JPEG", quality=jpeg, subsampling=2, optimize=False)
     return buf.getvalue()
 
 
@@ -109,10 +300,11 @@ def mjpeg_frames(mon_id=0, quality="medium", stop_after=None):
     q = QUALITY.get(quality, QUALITY["medium"])
     delay = 1.0 / q["fps"]
     started = time.time()
+    mon = monitor(mon_id)
     while True:
         t0 = time.time()
         try:
-            frame = grab_jpeg(mon_id, q["width"], q["jpeg"])
+            frame = grab_jpeg(mon_id, q["width"], q["jpeg"], mon=mon)
         except Exception:
             time.sleep(0.5)
             continue
