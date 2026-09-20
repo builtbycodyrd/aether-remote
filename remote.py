@@ -39,6 +39,7 @@ import auth     # noqa: E402
 import stream   # noqa: E402
 import library  # noqa: E402
 import layout   # noqa: E402
+import update   # noqa: E402
 
 
 # The scan takes ~1.3s, so cache it and refresh on demand rather than on
@@ -357,6 +358,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    # -- updates -----------------------------------------------------------
+    def _update_install(self):
+        """Download the new installer and hand off to it.
+
+        The installer's first act is to stop this process, so the reply has
+        to be on the wire before it starts. Hence the short delay: answer the
+        phone, THEN pull the rug.
+
+        It runs --quiet --no-admin on purpose. The firewall rule and the
+        startup task already exist and point at the same folder, so there is
+        nothing left that needs admin - which means no UAC prompt nobody is
+        there to click.
+        """
+        try:
+            exe = update.fetch_installer()
+        except Exception as e:
+            log("update: download failed: %s" % e)
+            return self._send(502, {"error": str(e)})
+
+        def go():
+            time.sleep(1.5)
+            try:
+                subprocess.Popen([exe, "--quiet", "--no-admin"],
+                                 cwd=os.path.dirname(exe),
+                                 creationflags=0x08000000,
+                                 stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except Exception as e:
+                log("update: could not start the installer: %s" % e)
+
+        log("update: installing %s" % os.path.basename(exe))
+        threading.Thread(target=go, daemon=True).start()
+        return self._send(200, {"ok": True, "installer": os.path.basename(exe),
+                                "restarting": True})
+
     # -- routing ----------------------------------------------------------
     def do_GET(self):
         u = urlparse(self.path)
@@ -495,6 +532,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/browse":
                 return self._send(200, self._browse(qs.get("p", [""])[0]))
 
+            if path == "/api/update":
+                # Cached: the page polls this, GitHub does not need to hear
+                # about it more than once a day.
+                return self._send(200, update.state())
+
             return self._send(404, {"error": "no such path"})
         except Exception as e:
             log("GET %s failed: %s\n%s" % (path, e, traceback.format_exc()))
@@ -538,6 +580,22 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logout":
                 return self._send(200, {"ok": True}, extra={
                     "Set-Cookie": "rs=; Path=/; Max-Age=0; SameSite=Lax"})
+
+            # ---- updates ----
+            if path == "/api/update/check":
+                return self._send(200, update.state(force=True))
+
+            if path == "/api/update/skip":
+                if b.get("clear"):
+                    update.unskip()
+                    log("update: dismissal cleared")
+                else:
+                    update.skip(b.get("version") or None)
+                    log("update: %s dismissed" % (b.get("version") or "latest"))
+                return self._send(200, update.state())
+
+            if path == "/api/update/install":
+                return self._update_install()
 
             # ---- desktop input ----
             if path == "/api/click":

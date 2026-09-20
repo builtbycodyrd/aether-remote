@@ -188,27 +188,54 @@
     border:2px solid var(--secondary);pointer-events:none;opacity:0;
     transform:translate(-50%,-50%) scale(.4);
     box-shadow:0 0 16px var(--secondary)}
-  /* Sits off-screen but focusable: focusing it is what raises the phone
-     keyboard, and every keystroke is read from it. */
-  #fsKeys{position:absolute;left:-9999px;top:0;width:1px;height:1px;
-    opacity:0;border:0;padding:0}
-
   #fsBar{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;
     gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 10px;
     background:linear-gradient(180deg,rgba(2,2,8,.92),rgba(2,2,8,0));
     transition:opacity .25s,transform .25s}
   #fsBar.hide{opacity:0;transform:translateY(-100%);pointer-events:none}
-  #fsKeysBar{position:absolute;left:0;right:0;
-    bottom:calc(env(safe-area-inset-bottom));
-    display:flex;gap:6px;padding:10px 12px;overflow-x:auto;
-    background:linear-gradient(0deg,rgba(2,2,8,.92),rgba(2,2,8,0));
-    transition:opacity .25s,transform .25s}
-  #fsKeysBar.hide{opacity:0;transform:translateY(100%);pointer-events:none}
+
+  /* The dock stays put. The top bar can fade away because it only holds
+     settings; this holds the keyboard and the keys a phone cannot send, and
+     hunting for those is exactly what made the first version annoying.
+     `bottom` is driven from visualViewport so it rides above the iOS
+     keyboard instead of disappearing behind it. */
+  /* touch-action back to auto: the viewer sets `none` so a finger on the
+     desktop image does not scroll the page, but the input needs normal
+     touch behaviour for the caret and for long-press-to-paste. */
+  #fsDock{position:absolute;left:0;right:0;bottom:0;z-index:4;
+    touch-action:auto;padding-bottom:env(safe-area-inset-bottom);
+    background:linear-gradient(0deg,rgba(2,2,8,.94) 60%,rgba(2,2,8,0));
+    transition:bottom .18s ease-out}
+  #fsKeysBar{display:flex;gap:6px;padding:8px 12px 4px;overflow-x:auto;
+    scrollbar-width:none}
+  #fsKeysBar::-webkit-scrollbar{display:none}
+  #fsTypeRow{display:flex;gap:8px;padding:4px 12px 10px;align-items:center}
+  /* Visible on purpose. An off-screen input took the keystrokes fine, but
+     you could not see that the keyboard was aimed at the PC, and you could
+     not long-press it to paste. */
+  #fsKeys{flex-grow:1;min-width:0;border:1px solid var(--line2);
+    border-radius:10px;background:rgba(8,7,20,.85);color:var(--text);
+    font-size:16px;                    /* 16px or iOS zooms the page on focus */
+    padding:9px 12px;outline:none;-webkit-user-select:text;user-select:text}
+  #fsKeys:focus{border-color:var(--primary)}
+  #fsKeys::placeholder{color:#6b7385;font-size:13px}
+
   #fs .fsb{flex:0 0 auto;border:1px solid var(--line2);border-radius:9px;
     background:rgba(8,7,20,.75);color:var(--text);font-size:12.5px;
     padding:8px 12px;cursor:pointer;white-space:nowrap;
     backdrop-filter:blur(8px)}
+  #fs .fsb:active{background:var(--primary);border-color:transparent}
   #fs .fsb.on{background:var(--primary);border-color:transparent;color:#fff}
+  #fs .fsb.key{min-width:42px;text-align:center;padding:8px 10px}
+  /* Landscape on a phone is about 390px tall. At full size the dock would
+     eat a quarter of the picture, so tighten it up. */
+  @media (max-height:470px){
+    #fsKeysBar{padding:5px 10px 3px;gap:5px}
+    #fsTypeRow{padding:3px 10px 6px;gap:6px}
+    #fs .fsb{font-size:11.5px;padding:6px 10px}
+    #fs .fsb.key{min-width:36px;padding:6px 8px}
+    #fsKeys{padding:6px 10px}
+  }
   #fs select.fsb{padding:7px 8px;max-width:38vw}
   #fs .grow{flex-grow:1}
   #fsStat{font-size:11px;color:#8c94a8;white-space:nowrap}
@@ -390,8 +417,6 @@
 <div id="fs">
   <img id="fsFeed" alt="">
   <div id="fsRing"></div>
-  <input id="fsKeys" autocomplete="off" autocapitalize="off"
-         autocorrect="off" spellcheck="false" aria-label="Keyboard input">
 
   <div id="fsBar">
     <button class="fsb" id="fsClose">Done</button>
@@ -401,22 +426,37 @@
       <option value="medium" selected>Medium</option>
       <option value="high">High</option>
     </select>
-    <button class="fsb" id="fsMode">Trackpad</button>
-    <button class="fsb" id="fsKb">Keyboard</button>
+    <button class="fsb" id="fsRight">Right click</button>
     <span class="grow"></span>
     <span id="fsStat"></span>
   </div>
 
-  <div id="fsKeysBar">
-    <button class="fsb" data-press="enter">Enter</button>
-    <button class="fsb" data-press="backspace">&#9003;</button>
-    <button class="fsb" data-press="tab">Tab</button>
-    <button class="fsb" data-press="esc">Esc</button>
-    <button class="fsb" data-press="win">Win</button>
-    <button class="fsb" data-combo="alt+tab">Alt+Tab</button>
-    <button class="fsb" data-combo="ctrl+c">Copy</button>
-    <button class="fsb" data-combo="ctrl+v">Paste</button>
-    <button class="fsb" id="fsRight">Right click</button>
+  <div id="fsDock">
+    <!-- Everything an iPhone keyboard has no key for. -->
+    <div id="fsKeysBar">
+      <button class="fsb key" data-press="esc">Esc</button>
+      <button class="fsb key" data-press="tab">Tab</button>
+      <button class="fsb key" data-combo="ctrl+c">Copy</button>
+      <button class="fsb key" data-combo="ctrl+v">Paste</button>
+      <button class="fsb key" data-combo="ctrl+a">All</button>
+      <button class="fsb key" data-combo="ctrl+z">Undo</button>
+      <button class="fsb key" data-press="up">&#9650;</button>
+      <button class="fsb key" data-press="down">&#9660;</button>
+      <button class="fsb key" data-press="left">&#9664;</button>
+      <button class="fsb key" data-press="right">&#9654;</button>
+      <button class="fsb key" data-press="win">Win</button>
+      <button class="fsb key" data-combo="alt+tab">Alt+Tab</button>
+      <button class="fsb key" data-press="f5">F5</button>
+      <button class="fsb key" data-press="delete">Del</button>
+    </div>
+    <div id="fsTypeRow">
+      <input id="fsKeys" type="text" enterkeyhint="enter" autocomplete="off"
+             autocapitalize="off" autocorrect="off" spellcheck="false"
+             placeholder="Tap here to type on the PC — long-press to paste"
+             aria-label="Type on the PC">
+      <button class="fsb" data-press="backspace" aria-label="Backspace">&#9003;</button>
+      <button class="fsb" id="fsEnter">Enter</button>
+    </div>
   </div>
 
   <div id="fsToast"></div>

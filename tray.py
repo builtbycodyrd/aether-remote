@@ -28,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import paths                      # noqa: E402
+import update                     # noqa: E402
 
 # The program's folder. The user's files live in paths.DATA_DIR, which is
 # the same place when running from source and %LOCALAPPDATA% once installed.
@@ -56,6 +57,11 @@ MF_STRING, MF_SEPARATOR, MF_GRAYED = 0x0000, 0x0800, 0x0001
 
 IDM_OPEN, IDM_PAIR, IDM_ADD, IDM_RESCAN, IDM_START, IDM_STOP, IDM_QUIT = (
     1001, 1002, 1003, 1004, 1005, 1006, 1007)
+IDM_UPDATE = 1008
+
+# What the last update check found. Filled in on a background thread so a
+# slow or dead network can never hold up the tray icon appearing.
+UPD = {"s": None}
 
 
 class NOTIFYICONDATA(ctypes.Structure):
@@ -379,6 +385,28 @@ def notify(title, msg):
     shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
 
 
+def _update_watch():
+    """Notice a new release, say so once, then be quiet.
+
+    Once per version, not once per launch: someone who leaves their PC on for
+    a month should be told once, and someone who reboots daily should not be
+    told thirty times.
+    """
+    time.sleep(20)                 # let the tray and server settle first
+    while True:
+        try:
+            s = update.state()
+            UPD["s"] = s
+            if s.get("available") and s.get("seen") != s.get("latest"):
+                update.mark_seen(s["latest"])
+                notify(APP_NAME, "Version %s is available. Right-click here, "
+                                 "or open the desktop page, to install it."
+                       % s["latest"])
+        except Exception:
+            pass
+        time.sleep(6 * 60 * 60)
+
+
 def _load_icon():
     """Our own .ico if it is beside us, else the default application icon."""
     ico = paths.asset("aether.ico")
@@ -418,6 +446,11 @@ def _show_menu(hwnd):
                        IDM_START, "Start")
     user32.AppendMenuW(menu, MF_STRING | (0 if running else MF_GRAYED),
                        IDM_STOP, "Stop")
+    s = UPD["s"]
+    if s and s.get("available"):
+        user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
+        user32.AppendMenuW(menu, MF_STRING, IDM_UPDATE,
+                           "Update to %s…" % s["latest"])
     user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
     user32.AppendMenuW(menu, MF_STRING, IDM_QUIT, "Quit")
 
@@ -448,6 +481,11 @@ def _on_command(cmd):
     elif cmd == IDM_STOP:
         SERVER.stop()
         notify(APP_NAME, "Stopped. Your phone cannot reach this PC now.")
+    elif cmd == IDM_UPDATE:
+        # The desktop page owns the update conversation - notes, the
+        # button, the "no thanks". No point building a second one in a
+        # tray menu.
+        webbrowser.open(local_url().rstrip("/") + "/pc")
     elif cmd == IDM_QUIT:
         user32.DestroyWindow(HWND)
 
@@ -557,6 +595,8 @@ def main():
         pass
 
     time.sleep(1.2)
+
+    threading.Thread(target=_update_watch, daemon=True).start()
 
     if setup_done():
         notify(APP_NAME, "Running. Right-click the tray icon to pair a phone.")

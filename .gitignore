@@ -25,10 +25,12 @@ custom_art.json
 remote.pid
 pair-qr.png
 last-message.txt
+update.json
 
 # --- generated at runtime ----------------------------------------------------
 icons/
 art/
+updates/
 *.log
 firewall-before.txt
 

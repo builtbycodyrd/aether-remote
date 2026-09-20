@@ -515,6 +515,13 @@ function viewSettings(){
       <label class="row"><div class="t">Run Aether Remote at logon
         <div class="d" id="autoNote">—</div></div>
         <input type="checkbox" id="autostart"></label>
+    </div>
+
+    <div class="card">
+      <h3>Version</h3>
+      <label class="row"><div class="t"><span id="verLine">—</span>
+        <div class="d" id="verNote">Checking…</div></div>
+        <button class="btn sm" id="verCheck">Check for updates</button></label>
     </div>`;
 
   api('/api/settings').then(s => {
@@ -522,6 +529,41 @@ function viewSettings(){
     $('#port').value = s.port;
     $('#autostart').checked = !!s.autostart;
     $('#autoNote').textContent = s.autostartDetail || '';
+  });
+
+  // The way back in after someone has hidden a version with the X.
+  const verPaint = () => {
+    const s = U.s;
+    const line = $('#verLine'), note = $('#verNote');
+    if (!line) return;                       // view changed while we waited
+    if (!s){
+      line.textContent = 'Aether Remote';
+      note.textContent = 'Could not reach GitHub to check.';
+      return;
+    }
+    line.textContent = 'Aether Remote ' + s.current;
+    note.textContent =
+      s.error ? 'Could not check: ' + s.error
+      : !s.newer ? 'This is the latest version.'
+      : s.available ? s.latest + ' is available.'
+      : s.latest + ' is available — you chose to hide it.';
+    $('#verCheck').textContent = s.newer && !s.available
+      ? 'Show it again' : 'Check for updates';
+  };
+  verPaint();
+  (U.s ? Promise.resolve(U.s) : updLoad()).then(verPaint);
+
+  $('#verCheck').addEventListener('click', async () => {
+    const btn = $('#verCheck');
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    if (U.s && U.s.newer && !U.s.available){
+      try { await api('/api/update/skip', { clear: true }); } catch(e){}
+    }
+    await updLoad(true);
+    btn.disabled = false;
+    verPaint();
+    if (U.s && !U.s.newer) toast("You're up to date");
   });
 
   const push = async () => {
@@ -560,6 +602,169 @@ function viewSettings(){
   });
 }
 
+/* ======================= UPDATES =======================
+ * The whole point is that someone who does not think about software updates
+ * still gets them. So: a bar, three buttons, plain words. "More info" shows
+ * what changed, the X hides this version for good, and nothing downloads
+ * until one of those buttons is pressed.
+ */
+const U = { s: null, busy: false };
+
+async function updLoad(force){
+  try {
+    U.s = force ? await api('/api/update/check', {}) : await api('/api/update');
+  } catch(e){ U.s = null; }
+  updPaint();
+  return U.s;
+}
+
+function updPaint(){
+  const bar = $('#updbar'), s = U.s;
+  if (U.busy) return;                       // mid-install: leave the text be
+  if (!s || !s.available){ bar.classList.add('hide'); return; }
+  const mb = s.asset_size ? (s.asset_size / 1048576).toFixed(1) + ' MB' : '';
+  $('#ubTitle').textContent = 'Version ' + s.latest + ' is available';
+  $('#ubSub').textContent = "You're on " + s.current +
+    (mb ? ' · ' + mb + ' download' : '');
+  $('#ubActions').classList.remove('hide');
+  bar.classList.remove('hide');
+}
+
+/* Release notes are Markdown written by a human on GitHub. Escape first,
+ * then put back only the handful of tags worth having - the text never gets
+ * to bring its own HTML. */
+function updNotes(md){
+  const inline = (t) => esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[(.+?)\]\((https?:\/\/[^\s)]+)\)/g,
+             '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  let html = '', li = null, inList = false;
+  const closeLi = () => {
+    if (li !== null){ html += '<li>' + li + '</li>'; li = null; }
+  };
+  const closeList = () => {
+    closeLi();
+    if (inList){ html += '</ul>'; inList = false; }
+  };
+
+  for (const raw of String(md || '').replace(/\r/g, '').split('\n')){
+    const l = raw.trim();
+    const bullet = l.match(/^[-*]\s+(.*)$/);
+    if (bullet){
+      closeLi();
+      if (!inList){ html += '<ul>'; inList = true; }
+      li = inline(bullet[1]);
+      continue;
+    }
+    // An indented line under a bullet is that bullet wrapping, not a new
+    // paragraph. Release notes are written in an editor that wraps, so
+    // without this a long bullet breaks the list in half.
+    if (li !== null && l && /^\s/.test(raw)){
+      li += ' ' + inline(l);
+      continue;
+    }
+    closeList();
+    if (!l) continue;
+    const h = l.match(/^#{1,6}\s+(.*)$/);
+    html += h ? '<h4>' + inline(h[1]) + '</h4>' : '<p>' + inline(l) + '</p>';
+  }
+  closeList();
+  return html || '<p class="muted">No notes were published for this release.</p>';
+}
+
+function updModal(){
+  const s = U.s;
+  if (!s) return;
+  const when = s.published
+    ? ' · released ' + new Date(s.published).toLocaleDateString() : '';
+  const m = document.createElement('div');
+  m.className = 'mask';
+  m.innerHTML = `
+    <div class="modal">
+      <header>
+        <h3>${esc(s.name || ('Version ' + s.latest))}</h3>
+        <div class="d">You're on ${esc(s.current)} — ${esc(s.latest)} is
+          available${esc(when)}</div>
+      </header>
+      <div class="body">${updNotes(s.notes)}</div>
+      <footer>
+        ${s.page ? `<a class="btn sm" href="${esc(s.page)}" target="_blank"
+           rel="noopener">View on GitHub</a>` : ''}
+        <div class="sp"></div>
+        <button class="btn sm" data-x>Not now</button>
+        <button class="btn sm pri" data-go>Update now</button>
+      </footer>
+    </div>`;
+  document.body.appendChild(m);
+  const close = () => { m.remove(); document.removeEventListener('keydown', key); };
+  const key = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', key);
+  m.addEventListener('click', e => { if (e.target === m) close(); });
+  m.querySelector('[data-x]').addEventListener('click', close);
+  m.querySelector('[data-go]').addEventListener('click', () => {
+    close(); updInstall();
+  });
+}
+
+async function updInstall(){
+  if (U.busy) return;
+  U.busy = true;
+  const v = U.s ? U.s.latest : '';
+  $('#updbar').classList.remove('hide');
+  $('#ubActions').classList.add('hide');
+  $('#ubTitle').textContent = 'Downloading version ' + v + '…';
+  $('#ubSub').textContent = 'Your layout, artwork and paired phones are ' +
+    'kept — only the program itself is replaced.';
+  try {
+    await api('/api/update/install', {});
+    $('#ubTitle').textContent = 'Installing version ' + v + '…';
+    $('#ubSub').textContent = 'Aether Remote closes and reopens itself. ' +
+      'This page comes back on its own.';
+    updWaitForRestart();
+  } catch(e){
+    U.busy = false;
+    $('#ubActions').classList.remove('hide');
+    updPaint();
+    toast('Update failed: ' + e.message);
+  }
+}
+
+/* The server is about to be killed and restarted under us. Wait for it to go
+ * down FIRST - otherwise the very first poll succeeds against the old copy
+ * and we reload into the version we were trying to leave. */
+function updWaitForRestart(){
+  let tries = 0, wentDown = false;
+  const poll = setInterval(async () => {
+    tries++;
+    let up = false;
+    try { up = (await fetch('/ping', { cache: 'no-store' })).ok; }
+    catch(e){ up = false; }
+    if (!up) wentDown = true;
+    else if (wentDown){
+      clearInterval(poll);
+      $('#ubTitle').textContent = 'Updated — reloading';
+      setTimeout(() => location.reload(), 1200);
+      return;
+    }
+    if (tries > 75){
+      clearInterval(poll);
+      $('#ubSub').textContent = 'Still going. If this stays here, open ' +
+        'Aether Remote from the Start menu.';
+    }
+  }, 2000);
+}
+
+$('#ubInfo').addEventListener('click', updModal);
+$('#ubGo').addEventListener('click', updInstall);
+$('#ubSkip').addEventListener('click', async () => {
+  const v = U.s ? U.s.latest : '';
+  try { U.s = await api('/api/update/skip', { version: v }); } catch(e){}
+  updPaint();
+  toast('Hidden until there is a newer version');
+  if (view === 'settings') VIEWS.settings();
+});
+
 /* ======================= shell ======================= */
 const VIEWS = { library: viewLibrary, layout: viewLayout, scenes: viewScenes,
                 pair: viewPair, settings: viewSettings };
@@ -593,6 +798,10 @@ async function tick(){
     VIEWS[view]();
     tick();
     setInterval(tick, 3000);
+    // Cheap: the server answers from a file and only talks to GitHub once
+    // a day. Re-asked hourly so a long-running window notices a release.
+    updLoad();
+    setInterval(updLoad, 60 * 60 * 1000);
   } catch(e){
     main.innerHTML = `<h2>Cannot reach the server</h2>
       <div class="sub">${esc(e.message)}</div>`;

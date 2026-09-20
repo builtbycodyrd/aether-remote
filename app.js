@@ -1212,28 +1212,31 @@ $('#setBtn').addEventListener('click', openSettings);
  * a "type a string and press Send" box underneath. You could look at the PC
  * and poke it; you could not use it.
  *
- * Two pointer modes, because neither is right on its own:
- *   trackpad - drag anywhere to move the cursor relatively, tap to click.
- *              The only way to hit a small target on a 4K monitor from a
- *              phone. Uses /api/movepad then /api/tap, which clicks where the
- *              cursor already is rather than re-positioning it.
- *   direct   - tap maps straight to that point on the screen. Faster when
- *              the target is big and obvious. Uses /api/click, and supports
- *              drag because it has real start and end coordinates.
+ * Tap where you want to click. There WAS a trackpad mode - drag to move the
+ * cursor relatively - and it was removed, because the captured video does
+ * not contain the mouse cursor. You were dragging something invisible, which
+ * is unusable no matter how well the maths works. Tap-to-click needs no
+ * cursor: you aim with your finger.
  *
- * Typing is live: a focused off-screen input, read on every `input` event.
- * Mobile keyboards do not report useful keyCodes (they send 229), so the
- * VALUE is what gets read, not the keystroke - that is the part that makes
- * this work on a phone at all. Special keys do fire keydown properly, so
- * those are handled there.
+ * Typing is the part that matters. The input at the bottom is real and
+ * visible: tapping it raises the phone keyboard, what you type goes straight
+ * to the PC as you type it, and Enter searches. It is visible rather than
+ * off-screen for two reasons - you can see the keyboard is aimed at the PC,
+ * and you can long-press it to paste from the phone's clipboard, which the
+ * Clipboard API will not do over plain HTTP.
+ *
+ * Mobile keyboards do not report useful keyCodes (they send 229), so what
+ * gets sent is worked out by diffing the input's VALUE against what was
+ * already sent. That handles typing, pasting and deleting with one rule.
+ *
+ * The keys a phone keyboard simply does not have - Esc, Tab, Ctrl+C, arrows,
+ * Win - live in the toolbar above it, which does not auto-hide.
  */
 
 const FS = {
-  on: false, mon: 0, mode: 'pad', frames: 0, fpsTimer: null,
-  dx: 0, dy: 0, pending: false, barTimer: null, seenHint: false,
+  on: false, mon: 0, frames: 0, fpsTimer: null,
+  barTimer: null, seenHint: false, sent: '',
 };
-
-const PAD_SPEED = 1.9;      // cursor pixels per screen pixel dragged
 
 function fsq(id){ return document.getElementById(id); }
 
@@ -1246,13 +1249,25 @@ function fsToast(msg, ms){
   t._t = setTimeout(() => t.classList.remove('show'), ms || 2200);
 }
 
+/* Only the top bar hides. The dock at the bottom is the keyboard and the
+   function keys, and a toolbar you have to go looking for is the thing that
+   made the first version of this annoying to use. */
 function fsBars(show){
-  const bar = fsq('fsBar'), keys = fsq('fsKeysBar');
+  const bar = fsq('fsBar');
   if (!bar) return;
   bar.classList.toggle('hide', !show);
-  keys.classList.toggle('hide', !show);
   clearTimeout(FS.barTimer);
   if (show) FS.barTimer = setTimeout(() => fsBars(false), 4000);
+}
+
+/* Keep the dock sitting on top of the phone keyboard rather than under it.
+   visualViewport shrinks when the keyboard opens; the difference against
+   innerHeight is how tall the keyboard is. */
+function fsDock(){
+  const vv = window.visualViewport, dock = fsq('fsDock');
+  if (!dock) return;
+  const gap = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+  dock.style.bottom = Math.round(gap) + 'px';
 }
 
 function openDesktop(tile){
@@ -1267,8 +1282,8 @@ function openDesktop(tile){
     `<option value="${m.id}" ${m.id === FS.mon ? 'selected' : ''}>${esc(m.label)}</option>`
   ).join('');
 
-  setMode(FS.mode);
   fsBars(true);
+  fsDock();
   fsStartFeed();
 
   // Real fullscreen where it exists. iOS Safari only allows it for <video>,
@@ -1284,7 +1299,8 @@ function openDesktop(tile){
     FS.seenHint = true;
     try { FS.seenHint = !!localStorage.getItem('aether.fshint'); } catch(e){}
     if (!FS.seenHint){
-      fsToast('Drag to move the cursor, tap to click. Tap the top edge for the toolbar.', 4200);
+      fsToast('Tap to click, hold to right-click, two fingers to scroll. ' +
+              'Tap the box at the bottom to type.', 4600);
       try { localStorage.setItem('aether.fshint', '1'); } catch(e){}
     }
   }
@@ -1323,15 +1339,6 @@ function fsStopFeed(){
   clearInterval(FS.fpsTimer);
 }
 
-function setMode(m){
-  FS.mode = m;
-  const b = fsq('fsMode');
-  if (b){
-    b.textContent = m === 'pad' ? 'Trackpad' : 'Direct';
-    b.classList.toggle('on', m === 'pad');
-  }
-}
-
 function fsMon(){ return +(fsq('fsMon').value || 0); }
 
 /* Where did that touch land on the actual screen image?
@@ -1360,26 +1367,10 @@ function fsRing(px, py){
             {duration:420, easing:'ease-out'});
 }
 
-/* Movement is accumulated and flushed once per frame. Posting every
-   pointermove would put 120 requests a second on the wire and the cursor
-   would lag behind the finger. */
-function padMove(dx, dy){
-  FS.dx += dx * PAD_SPEED;
-  FS.dy += dy * PAD_SPEED;
-  if (FS.pending) return;
-  FS.pending = true;
-  requestAnimationFrame(() => {
-    const x = FS.dx, y = FS.dy;
-    FS.dx = 0; FS.dy = 0; FS.pending = false;
-    if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) return;
-    api('/api/movepad', {dx:x, dy:y}).catch(() => {});
-  });
-}
-
 /* ---------- pointer ----------
  * Pointer Events rather than touch events, so the same code drives a finger
  * on a phone and a mouse in a desktop browser. Two live pointers means
- * scroll; one means move or click depending on the mode.
+ * scroll; one means tap (click), hold (right click) or drag.
  */
 (function wireFsPointer(){
   const fs = fsq('fs');
@@ -1389,7 +1380,7 @@ function padMove(dx, dy){
   let longT = null, moved = false, start = null, scrollY = null;
   let lastTap = 0, lastTapX = 0, lastTapY = 0;
 
-  const onChrome = t => t.closest('#fsBar') || t.closest('#fsKeysBar');
+  const onChrome = t => t.closest('#fsBar') || t.closest('#fsDock');
 
   fs.addEventListener('pointerdown', e => {
     if (onChrome(e.target)) return;         // let the toolbars work normally
@@ -1415,8 +1406,7 @@ function padMove(dx, dy){
       fsRing(start.x, start.y);
       if (navigator.vibrate) navigator.vibrate(12);
       try {
-        if (FS.mode === 'pad') await api('/api/tap', {button:'right'});
-        else if (start.n) await api('/api/click',
+        if (start.n) await api('/api/click',
           {mon:fsMon(), x:start.n.x, y:start.n.y, button:'right'});
         fsToast('Right click', 900);
       } catch(err){ fsToast(err.message); }
@@ -1427,7 +1417,6 @@ function padMove(dx, dy){
   fs.addEventListener('pointermove', e => {
     const p = pts.get(e.pointerId);
     if (!p) return;
-    const dx = e.clientX - p.x, dy = e.clientY - p.y;
     p.x = e.clientX; p.y = e.clientY;
 
     if (pts.size >= 2){
@@ -1450,7 +1439,6 @@ function padMove(dx, dy){
       moved = true;
       clearTimeout(longT);
     }
-    if (FS.mode === 'pad' && moved) padMove(dx, dy);
   });
 
   async function release(e){
@@ -1463,9 +1451,9 @@ function padMove(dx, dy){
     const dt = Date.now() - st.t;
 
     if (moved){
-      // Direct mode has real start and end coordinates, so a drag is a drag.
-      // Trackpad mode already moved the cursor as the finger moved.
-      if (FS.mode === 'direct' && st.n){
+      // A finger that travelled is a drag: real start and end coordinates,
+      // so window-dragging and text selection both work.
+      if (st.n){
         const end = fsNorm(e.clientX, e.clientY);
         if (end) {
           try { await api('/api/drag', {mon:fsMon(), x1:st.n.x, y1:st.n.y,
@@ -1484,8 +1472,7 @@ function padMove(dx, dy){
 
     fsRing(st.x, st.y);
     try {
-      if (FS.mode === 'pad') await api('/api/tap', {double: dbl});
-      else if (st.n) await api('/api/click',
+      if (st.n) await api('/api/click',
         {mon:fsMon(), x:st.n.x, y:st.n.y, double: dbl});
     } catch(err){ fsToast(err.message); }
   }
@@ -1498,32 +1485,89 @@ function padMove(dx, dy){
   });
 })();
 
-/* ---------- live typing ----------
- * The off-screen input is the keyboard. Phone keyboards report keyCode 229
- * for ordinary characters, so reading the VALUE on `input` is the only
- * reliable way to know what was typed. Special keys do report properly, so
- * those come from keydown - and must preventDefault, or Backspace would eat
- * the input's own (empty) contents instead of reaching the PC.
+/* ---------- typing ----------
+ * What you type goes to the PC as you type it, so the PC's own search box
+ * fills in live and Enter searches - which is the whole point.
+ *
+ * The box keeps its text rather than clearing on every character, because an
+ * input that empties itself as you type looks broken, and because you cannot
+ * long-press an empty invisible field to paste into it.
+ *
+ * So what gets sent is a DIFF. Compare the box against what has already been
+ * sent: back up over the characters that disappeared, type the ones that
+ * appeared. One rule covers typing, autocorrect rewriting a whole word,
+ * pasting a paragraph, and holding backspace - none of which report a usable
+ * keyCode on a phone (they all report 229).
  */
 const FS_KEYS = {
-  Enter:'enter', Backspace:'backspace', Tab:'tab', Escape:'esc',
+  Enter:'enter', Tab:'tab', Escape:'esc',
   ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
   Delete:'delete', Home:'home', End:'end',
   PageUp:'pageup', PageDown:'pagedown',
 };
 
+function fsClearTyping(){
+  const box = fsq('fsKeys');
+  if (box) box.value = '';
+  FS.sent = '';
+}
+
+/* One queue for everything typed. Each keystroke is its own HTTP request, and
+   requests issued back-to-back can finish out of order - which would spell
+   the word wrong on the PC. Chaining them is the fix. */
+let fsQueue = Promise.resolve();
+
+function fsSend(fn){
+  fsQueue = fsQueue.then(fn).catch(err => fsToast(err.message));
+  return fsQueue;
+}
+
+/* Send the PC whatever turns `FS.sent` into the box's current contents. */
+function fsSync(){
+  const box = fsq('fsKeys');
+  if (!box) return fsQueue;
+  const now = box.value, was = FS.sent;
+  if (now === was) return fsQueue;
+  FS.sent = now;
+
+  let i = 0;
+  while (i < now.length && i < was.length && now[i] === was[i]) i++;
+  const back = was.length - i;
+  const add = now.slice(i);
+
+  return fsSend(async () => {
+    for (let n = 0; n < back; n++) await api('/api/press', {name:'backspace'});
+    if (add) await api('/api/type', {text: add});
+  });
+}
+
+function fsEnterKey(){
+  const box = fsq('fsKeys');
+  fsSync();
+  const p = fsSend(() => api('/api/press', {name:'enter'}));
+  // The PC has taken the line; start fresh rather than leaving text behind
+  // that the PC no longer has.
+  if (box) box.value = '';
+  FS.sent = '';
+  return p;
+}
+
 (function wireFsKeys(){
   const box = fsq('fsKeys');
   if (!box) return;
 
-  box.addEventListener('input', () => {
-    const text = box.value;
-    box.value = '';
-    if (!text) return;
-    api('/api/type', {text}).catch(err => fsToast(err.message));
-  });
+  box.addEventListener('input', fsSync);
 
   box.addEventListener('keydown', e => {
+    // Backspace with nothing left in the box still means "delete on the PC",
+    // which is how you clear a field the PC already had text in.
+    if (e.key === 'Backspace' && !box.value){
+      e.preventDefault();
+      fsSend(() => api('/api/press', {name:'backspace'}));
+      return;
+    }
+    if (e.key === 'Backspace') return;     // let the box edit; input() syncs
+
     const name = FS_KEYS[e.key];
     const mods = [];
     if (e.ctrlKey) mods.push('ctrl');
@@ -1531,69 +1575,76 @@ const FS_KEYS = {
     if (e.shiftKey && name) mods.push('shift');
     if (e.metaKey) mods.push('win');
 
+    if (e.key === 'Enter'){ e.preventDefault(); fsEnterKey(); return; }
     if (name){
       e.preventDefault();
-      api('/api/press', {name, mods}).catch(err => fsToast(err.message));
+      fsSync();
+      fsSend(() => api('/api/press', {name, mods}));
       return;
     }
     // A real keyboard sending Ctrl+C: the character never reaches `input`,
     // so it has to be caught here.
     if ((e.ctrlKey || e.altKey || e.metaKey) && e.key.length === 1){
       e.preventDefault();
-      api('/api/press', {name:e.key.toLowerCase(), mods})
-        .catch(err => fsToast(err.message));
+      fsSend(() => api('/api/press', {name:e.key.toLowerCase(), mods}));
     }
   });
+
+  // Tapping away from the box means the PC is no longer following it, so do
+  // not keep diffing against text the PC has moved on from.
+  box.addEventListener('blur', () => { box.value = ''; FS.sent = ''; });
+  box.addEventListener('focus', () => { box.value = ''; FS.sent = ''; });
 })();
 
 /* ---------- the toolbars ---------- */
 (function wireFsChrome(){
-  const bar = fsq('fsBar'), keys = fsq('fsKeysBar');
-  if (!bar) return;
+  const bar = fsq('fsBar'), dock = fsq('fsDock');
+  if (!bar || !dock) return;
 
   fsq('fsClose').onclick = closeDesktop;
   fsq('fsMon').onchange = fsStartFeed;
   fsq('fsQ').onchange = fsStartFeed;
 
-  fsq('fsMode').onclick = () => {
-    setMode(FS.mode === 'pad' ? 'direct' : 'pad');
-    fsToast(FS.mode === 'pad'
-      ? 'Trackpad — drag to move, tap to click'
-      : 'Direct — tap where you want to click', 1800);
-    fsBars(true);
-  };
-
-  fsq('fsKb').onclick = () => {
-    const box = fsq('fsKeys');
-    if (document.activeElement === box){ box.blur(); fsq('fsKb').classList.remove('on'); }
-    else { box.focus(); fsq('fsKb').classList.add('on'); fsToast('Keyboard on', 1200); }
-    fsBars(true);
-  };
-
+  // Right click where the cursor already is - which, after a tap, is where
+  // you last tapped. /api/tap clicks in place instead of re-positioning.
   fsq('fsRight').onclick = async () => {
-    try {
-      if (FS.mode === 'pad') await api('/api/tap', {button:'right'});
-      else fsToast('In direct mode, press and hold where you want to right click', 2400);
-    } catch(err){ fsToast(err.message); }
+    try { await api('/api/tap', {button:'right'}); fsToast('Right click', 900); }
+    catch(err){ fsToast(err.message); }
     fsBars(true);
   };
 
-  keys.addEventListener('click', async e => {
-    const pr = e.target.closest('[data-press]');
-    const cb = e.target.closest('[data-combo]');
-    try {
-      if (pr) await api('/api/press', {name: pr.dataset.press});
-      else if (cb){
-        const parts = cb.dataset.combo.split('+');
-        await api('/api/press', {name: parts.pop(), mods: parts});
-      }
-    } catch(err){ fsToast(err.message); }
-    fsBars(true);
+  fsq('fsEnter').onclick = fsEnterKey;
+
+  // The dock's buttons must not steal focus from the input: on a phone,
+  // losing focus closes the keyboard, and pressing Ctrl+C should not shut
+  // the keyboard you were typing with.
+  dock.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fsb')) e.preventDefault();
   });
 
-  // Any toolbar touch keeps them up; they fade again 4s later.
-  [bar, keys].forEach(el =>
-    el.addEventListener('pointerdown', () => fsBars(true)));
+  dock.addEventListener('click', async e => {
+    const pr = e.target.closest('[data-press]');
+    const cb = e.target.closest('[data-combo]');
+    if (!pr && !cb) return;
+    // Anything typed but not yet sent goes first, so Ctrl+A after typing
+    // selects what you actually typed.
+    fsSync();
+    await fsSend(() => {
+      if (pr) return api('/api/press', {name: pr.dataset.press});
+      const parts = cb.dataset.combo.split('+');
+      return api('/api/press', {name: parts.pop(), mods: parts});
+    });
+    // The PC's field no longer matches the box, so stop diffing against it.
+    fsClearTyping();
+  });
+
+  bar.addEventListener('pointerdown', () => fsBars(true));
+
+  // Ride above the phone keyboard as it opens and closes.
+  if (window.visualViewport){
+    window.visualViewport.addEventListener('resize', fsDock);
+    window.visualViewport.addEventListener('scroll', fsDock);
+  }
 
   // Leaving fullscreen by the system gesture or Esc should close the viewer
   // too, rather than leaving a stream running behind the board.

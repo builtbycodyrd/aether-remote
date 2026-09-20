@@ -22,13 +22,15 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
     font:14px/1.45 'Sora',system-ui,"Segoe UI",sans-serif;overflow:hidden}
+  /* Column, so the update bar can push the app down instead of covering it. */
+  body{display:flex;flex-direction:column}
   body::before{content:"";position:fixed;inset:-20%;z-index:0;
     background:radial-gradient(45vmax 45vmax at 12% 0%,color-mix(in srgb,var(--primary) 18%,transparent),transparent 60%),
       radial-gradient(40vmax 40vmax at 95% 60%,color-mix(in srgb,var(--secondary) 8%,transparent),transparent 60%);
     filter:blur(40px)}
 
   .app{position:relative;z-index:1;display:grid;
-    grid-template-columns:210px 1fr 430px;height:100vh}
+    grid-template-columns:210px 1fr 430px;flex:1 1 auto;min-height:0}
 
   /* ---------- sidebar ---------- */
   nav{border-right:1px solid var(--line);padding:18px 12px;display:flex;
@@ -126,9 +128,72 @@
     transition:transform .22s,opacity .22s;box-shadow:0 10px 30px rgba(0,0,0,.6)}
   #toast.show{transform:translateY(0);opacity:1}
   .hide{display:none}
+
+  /* ---------- update bar ---------- */
+  #updbar{position:relative;z-index:3;display:flex;align-items:center;gap:14px;
+    padding:10px 20px;border-bottom:1px solid var(--line2);flex:0 0 auto;
+    background:linear-gradient(100deg,
+      color-mix(in srgb,var(--primary) 30%,rgba(6,4,18,.94)),
+      color-mix(in srgb,var(--secondary) 15%,rgba(6,4,18,.94)));
+    box-shadow:0 6px 26px rgba(0,0,0,.45)}
+  #updbar .ub-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;
+    background:var(--secondary);animation:ubpulse 2.4s ease-out infinite}
+  @keyframes ubpulse{
+    0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--secondary) 65%,transparent)}
+    70%{box-shadow:0 0 0 10px transparent}
+    100%{box-shadow:0 0 0 0 transparent}}
+  #updbar .ub-t{flex-grow:1;font-size:13.5px;line-height:1.35;min-width:0}
+  #updbar .ub-t b{font-weight:600}
+  #updbar .ub-t span{display:block;font-size:11.5px;color:#b3bccb;margin-top:1px}
+  #updbar .ub-x{background:none;border:0;color:var(--muted);font-size:14px;
+    cursor:pointer;padding:5px 9px;border-radius:7px;line-height:1}
+  #updbar .ub-x:hover{color:var(--text);background:rgba(255,255,255,.09)}
+  #ubActions{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+
+  /* ---------- modal ---------- */
+  .mask{position:fixed;inset:0;z-index:70;background:rgba(1,2,8,.74);
+    backdrop-filter:blur(3px);display:flex;align-items:center;
+    justify-content:center;padding:34px}
+  .modal{width:min(660px,100%);max-height:82vh;display:flex;flex-direction:column;
+    background:#0a0818;border:1px solid var(--line2);border-radius:16px;
+    box-shadow:0 30px 80px rgba(0,0,0,.72)}
+  .modal header{padding:18px 22px 13px;border-bottom:1px solid var(--line)}
+  .modal header h3{margin:0;font-size:16.5px;font-weight:600}
+  .modal header .d{font-size:11.5px;color:var(--muted);margin-top:4px}
+  .modal .body{padding:14px 22px 18px;overflow-y:auto;font-size:13.2px;
+    line-height:1.62}
+  .modal .body h4{font-size:11px;letter-spacing:.9px;text-transform:uppercase;
+    color:var(--accent2);margin:17px 0 5px;font-weight:600}
+  .modal .body h4:first-child{margin-top:2px}
+  .modal .body p{margin:6px 0}
+  .modal .body ul{margin:6px 0;padding-left:19px}
+  .modal .body li{margin:4px 0}
+  .modal .body code{background:rgba(255,255,255,.07);padding:1px 5px;
+    border-radius:5px;font-size:12px}
+  .modal .body a{color:var(--secondary)}
+  .modal footer{padding:13px 22px;border-top:1px solid var(--line);display:flex;
+    gap:9px;align-items:center}
+  .modal footer .sp{flex-grow:1}
+  .modal footer a.btn{text-decoration:none}
 </style>
 </head>
 <body>
+
+<!-- Hidden until there is something to say. Nothing downloads on its own;
+     every button here is one the user pressed. -->
+<div id="updbar" class="hide">
+  <span class="ub-dot"></span>
+  <div class="ub-t">
+    <b id="ubTitle">An update is available</b>
+    <span id="ubSub"></span>
+  </div>
+  <div id="ubActions">
+    <button class="btn sm" id="ubInfo">More info</button>
+    <button class="btn sm pri" id="ubGo">Update now</button>
+    <button class="ub-x" id="ubSkip" title="Ignore this version">&#10005;</button>
+  </div>
+</div>
+
 <div class="app">
 
   <nav>

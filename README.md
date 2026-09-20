@@ -33,8 +33,11 @@ From then on your phone has a grid of tiles you arrange yourself:
 - **Your library, found automatically.** It scans Steam, Epic, Xbox and the
   Start Menu and pulls in the real box art, the way a console does.
 - **Media and power keys** — play/pause, skip, lock, sleep, screen off.
-- **The whole desktop, live.** Tap to click, drag to select, two fingers to
-  scroll, and a keyboard that types into whatever is focused.
+- **The whole desktop, live and usable.** Full screen, tap to click, hold to
+  right-click, two fingers to scroll. Tap the box at the bottom and your
+  phone's own keyboard types straight into whatever is focused on the PC —
+  search something, press Enter, done. A toolbar covers what a phone keyboard
+  has no key for: Esc, Tab, Copy, Paste, the arrows, Win, Alt+Tab.
 - **Built by you.** Drag tiles around, resize them, group them into sections,
   and recolour the whole app from two hex values.
 
@@ -174,6 +177,33 @@ exactly the moment recovery was needed.
 It runs in your logged-in session, deliberately, not as a Windows service. A
 session-0 service cannot capture the screen or inject input, which would break
 screen sharing entirely.
+
+---
+
+## Staying current
+
+Most people never check whether software they installed has a new version, so
+the app checks for them: once a day, against this repository's releases feed,
+and it says so in a bar across the top of the desktop page.
+
+<div align="center">
+<img src="docs/update-banner.jpg" width="860" alt="The update bar across the top of the desktop app">
+</div>
+
+Everything about it is deliberately boring. Nothing downloads until you press
+the button. **More info** shows the release notes for the version being
+offered, rendered from the Markdown on the release itself. The **✕** hides
+that version permanently — and only that version, so the next one still
+speaks up. The choice is stored on the PC, not in the browser, so it holds
+across phones and browsers, and Settings can hand it back.
+
+Pressing **Update now** fetches the installer over HTTPS from a host list
+pinned in the source, checks the file really is a Windows program before
+touching it, and hands off. The installer stops the running copy, replaces the
+program folder, leaves your data folder alone and starts the new version; the
+page waits for the server to go down and come back, then reloads itself. No
+admin prompt, because the firewall rule and the scheduled task already exist
+and still point at the same folder.
 
 ---
 
