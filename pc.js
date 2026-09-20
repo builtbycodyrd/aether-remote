@@ -758,8 +758,10 @@ function updWaitForRestart(){
 $('#ubInfo').addEventListener('click', updModal);
 $('#ubGo').addEventListener('click', updInstall);
 $('#ubSkip').addEventListener('click', async () => {
-  const v = U.s ? U.s.latest : '';
-  try { U.s = await api('/api/update/skip', { version: v }); } catch(e){}
+  // No state means the bar should not have been on screen at all; hide it
+  // rather than telling the server to dismiss a version we cannot name.
+  if (!U.s){ $('#updbar').classList.add('hide'); return; }
+  try { U.s = await api('/api/update/skip', { version: U.s.latest }); } catch(e){}
   updPaint();
   toast('Hidden until there is a newer version');
   if (view === 'settings') VIEWS.settings();

@@ -149,6 +149,12 @@
     cursor:pointer;padding:5px 9px;border-radius:7px;line-height:1}
   #updbar .ub-x:hover{color:var(--text);background:rgba(255,255,255,.09)}
   #ubActions{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+  /* These two MUST be id-scoped. `.hide{display:none}` is a class selector
+     and loses to `#updbar{display:flex}` on specificity, so adding the class
+     did nothing: the bar showed on every load whatever the update state said,
+     and the buttons stayed live during an install. Both actually happened. */
+  #updbar.hide,
+  #ubActions.hide{display:none}
 
   /* ---------- modal ---------- */
   .mask{position:fixed;inset:0;z-index:70;background:rgba(1,2,8,.74);
@@ -184,7 +190,10 @@
 <div id="updbar" class="hide">
   <span class="ub-dot"></span>
   <div class="ub-t">
-    <b id="ubTitle">An update is available</b>
+    <!-- Deliberately empty: filled in by updPaint(). A bar that ships with
+         "an update is available" written into it can tell that lie all by
+         itself if anything ever goes wrong with hiding it. -->
+    <b id="ubTitle"></b>
     <span id="ubSub"></span>
   </div>
   <div id="ubActions">
