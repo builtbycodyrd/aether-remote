@@ -185,19 +185,54 @@ def move_to(mon_id, nx, ny):
     return {"x": x, "y": y}
 
 
+# One table, used by both click() and click_here(), so a button added here
+# cannot work in one mode and silently not the other.
+_BUTTONS = {
+    "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+    "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+    "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+}
+
+
 def click(mon_id, nx, ny, button="left", double=False):
     pos = move_to(mon_id, nx, ny)
     time.sleep(0.012)
-    down, up = {
-        "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
-        "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
-        "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
-    }.get(button, (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
+    down, up = _BUTTONS.get(button, _BUTTONS["left"])
     _send(_mouse(down), _mouse(up))
     if double:
         time.sleep(0.05)
         _send(_mouse(down), _mouse(up))
     return pos
+
+
+def click_here(button="left", double=False):
+    """Click wherever the cursor already is.
+
+    Trackpad mode drives the cursor with move_relative and then taps; using
+    click() for that tap would first SetCursorPos back to a screen coordinate
+    the phone guessed, throwing away the positioning the user just did.
+    """
+    down, up = _BUTTONS.get(button, _BUTTONS["left"])
+    _send(_mouse(down), _mouse(up))
+    if double:
+        time.sleep(0.05)
+        _send(_mouse(down), _mouse(up))
+    pt = wt.POINT()
+    user32.GetCursorPos(byref(pt))
+    return {"x": int(pt.x), "y": int(pt.y)}
+
+
+def cursor():
+    """Where the cursor is now, and which monitor it is on."""
+    pt = wt.POINT()
+    user32.GetCursorPos(byref(pt))
+    for m in monitors():
+        if (m["x"] <= pt.x < m["x"] + m["w"]
+                and m["y"] <= pt.y < m["y"] + m["h"]):
+            return {"x": int(pt.x), "y": int(pt.y), "mon": m["id"],
+                    "nx": (pt.x - m["x"]) / max(1, m["w"]),
+                    "ny": (pt.y - m["y"]) / max(1, m["h"])}
+    return {"x": int(pt.x), "y": int(pt.y), "mon": 0, "nx": 0.0, "ny": 0.0}
 
 
 def drag(mon_id, x1, y1, x2, y2, steps=18):

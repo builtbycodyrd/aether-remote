@@ -403,7 +403,7 @@ board.addEventListener('click', async e => {
   // and dragging/resizing own the rest.
   if (editing) return;
 
-  if (t.kind === 'stream'){ openStream(t); return; }
+  if (t.kind === 'stream'){ openDesktop(t); return; }
   if (t.kind === 'slider') return;
 
   const destructive = t.kind === 'action' && /restart|shutdown|signout/.test(t.ref);
@@ -1206,154 +1206,583 @@ function saveThemeSoon(){
 
 $('#setBtn').addEventListener('click', openSettings);
 
-/* ---------- full screen stream ---------- */
-function openStream(t){
-  const mon = +t.ref || 0;
-  const body = `
-    <div id="screen" style="position:relative;border-radius:12px;overflow:hidden;
-      background:#05030f;border:1px solid var(--line);margin-top:12px;
-      aspect-ratio:16/9;display:flex;align-items:center;justify-content:center">
-      <img id="feed" style="width:100%;height:100%;object-fit:contain;touch-action:none">
-      <div id="ring" style="position:absolute;width:34px;height:34px;border-radius:50%;
-        border:2px solid var(--cyan);pointer-events:none;opacity:0;
-        transform:translate(-50%,-50%) scale(.4);box-shadow:0 0 14px var(--cyan)"></div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <select class="field" id="monSel" style="flex:1"></select>
-      <select class="field" id="qSel" style="flex:1">
-        <option value="low">Low</option><option value="medium" selected>Medium</option>
-        <option value="high">High</option></select>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <input class="field" id="typeBox" placeholder="Type on the PC…"
-        autocomplete="off" autocapitalize="off" style="flex:2">
-      <div class="btn" id="sendType" style="flex:1">Send</div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 14px">
-      ${[['enter','Enter'],['backspace','⌫'],['esc','Esc'],['tab','Tab']]
-        .map(([k,n]) => `<div class="btn" data-press="${k}">${n}</div>`).join('')}
-      <div class="btn" data-press="win">Win</div>
-      <div class="btn" data-combo="alt+tab">Alt+Tab</div>
-      <div class="btn" data-combo="ctrl+c">Copy</div>
-      <div class="btn" data-combo="ctrl+v">Paste</div>
-    </div>`;
-  openSheet('Desktop', body,
-    `<div style="flex-grow:1;font-size:11px;color:var(--muted)" id="fps"></div>
-     <button class="btn" id="sheetClose">Close</button>`);
+/* ================= full-screen desktop =================
+ *
+ * Replaces the old viewer, which was a 16:9 box inside the bottom sheet with
+ * a "type a string and press Send" box underneath. You could look at the PC
+ * and poke it; you could not use it.
+ *
+ * Two pointer modes, because neither is right on its own:
+ *   trackpad - drag anywhere to move the cursor relatively, tap to click.
+ *              The only way to hit a small target on a 4K monitor from a
+ *              phone. Uses /api/movepad then /api/tap, which clicks where the
+ *              cursor already is rather than re-positioning it.
+ *   direct   - tap maps straight to that point on the screen. Faster when
+ *              the target is big and obvious. Uses /api/click, and supports
+ *              drag because it has real start and end coordinates.
+ *
+ * Typing is live: a focused off-screen input, read on every `input` event.
+ * Mobile keyboards do not report useful keyCodes (they send 229), so the
+ * VALUE is what gets read, not the keystroke - that is the part that makes
+ * this work on a phone at all. Special keys do fire keydown properly, so
+ * those are handled there.
+ */
 
-  const sel = $('#monSel');
-  sel.innerHTML = ((S && S.monitors) || []).map(x =>
-    `<option value="${x.id}" ${x.id===mon?'selected':''}>${esc(x.label)}</option>`).join('');
+const FS = {
+  on: false, mon: 0, mode: 'pad', frames: 0, fpsTimer: null,
+  dx: 0, dy: 0, pending: false, barTimer: null, seenHint: false,
+};
 
-  startFeed();
+const PAD_SPEED = 1.9;      // cursor pixels per screen pixel dragged
+
+function fsq(id){ return document.getElementById(id); }
+
+function fsToast(msg, ms){
+  const t = fsq('fsToast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), ms || 2200);
 }
 
-let frames = 0, fpsTimer = null;
-function startFeed(){
-  const feed = $('#feed'); if (!feed) return;
-  const mon = $('#monSel') ? $('#monSel').value : 0;
-  const q = $('#qSel') ? $('#qSel').value : 'medium';
-  feed.src = `/api/stream?mon=${mon}&q=${q}&t=${Date.now()}`;
-  frames = 0;
-  clearInterval(fpsTimer);
-  fpsTimer = setInterval(() => {
-    const f = $('#fps'); if (f) f.textContent = frames + ' fps';
-    frames = 0;
-  }, 1000);
-  feed.onload = () => { frames++; };
-  wireFeed(feed, () => +($('#monSel').value || 0));
+function fsBars(show){
+  const bar = fsq('fsBar'), keys = fsq('fsKeysBar');
+  if (!bar) return;
+  bar.classList.toggle('hide', !show);
+  keys.classList.toggle('hide', !show);
+  clearTimeout(FS.barTimer);
+  if (show) FS.barTimer = setTimeout(() => fsBars(false), 4000);
 }
 
-function stopFeed(){
-  const feed = $('#feed'); if (feed) feed.src = '';
-  clearInterval(fpsTimer);
-}
-const _closeSheet = closeSheet;
-closeSheet = function(){ stopFeed(); _closeSheet(); };
+function openDesktop(tile){
+  const fs = fsq('fs');
+  if (!fs) return;
+  FS.mon = +((tile && tile.ref) || 0);
+  FS.on = true;
+  fs.classList.add('on');
 
-function wireFeed(feed, getMon){
-  function norm(ev){
-    const r = feed.getBoundingClientRect();
-    const nat = (feed.naturalWidth || 16) / (feed.naturalHeight || 9);
-    const box = r.width / r.height;
-    let w = r.width, h = r.height, ox = 0, oy = 0;
-    if (box > nat){ w = r.height * nat; ox = (r.width - w) / 2; }
-    else { h = r.width / nat; oy = (r.height - h) / 2; }
-    const cx = ev.clientX - r.left - ox, cy = ev.clientY - r.top - oy;
-    if (cx < 0 || cy < 0 || cx > w || cy > h) return null;
-    return { x: cx/w, y: cy/h, px: ev.clientX - r.left, py: ev.clientY - r.top };
-  }
-  function ping(px, py){
-    const r = $('#ring'); if (!r) return;
-    r.style.left = px+'px'; r.style.top = py+'px';
-    r.animate([{opacity:.95,transform:'translate(-50%,-50%) scale(.4)'},
-               {opacity:0,transform:'translate(-50%,-50%) scale(1.6)'}],
-              {duration:450, easing:'ease-out'});
-  }
+  const sel = fsq('fsMon');
+  sel.innerHTML = ((S && S.monitors) || [{id:0,label:'Main'}]).map(m =>
+    `<option value="${m.id}" ${m.id === FS.mon ? 'selected' : ''}>${esc(m.label)}</option>`
+  ).join('');
 
-  let down = null, longT = null, moved = false, pinchY = null;
+  setMode(FS.mode);
+  fsBars(true);
+  fsStartFeed();
 
-  feed.addEventListener('touchstart', e => {
-    if (e.touches.length === 2){
-      pinchY = (e.touches[0].clientY + e.touches[1].clientY)/2; return;
+  // Real fullscreen where it exists. iOS Safari only allows it for <video>,
+  // and a home-screen app has no browser chrome anyway, so a failure here is
+  // not a problem worth reporting to the user.
+  if (fs.requestFullscreen) fs.requestFullscreen().catch(() => {});
+  try {
+    if (screen.orientation && screen.orientation.lock)
+      screen.orientation.lock('landscape').catch(() => {});
+  } catch(e){}
+
+  if (!FS.seenHint){
+    FS.seenHint = true;
+    try { FS.seenHint = !!localStorage.getItem('aether.fshint'); } catch(e){}
+    if (!FS.seenHint){
+      fsToast('Drag to move the cursor, tap to click. Tap the top edge for the toolbar.', 4200);
+      try { localStorage.setItem('aether.fshint', '1'); } catch(e){}
     }
-    const p = norm(e.touches[0]); if (!p) return;
-    down = p; moved = false;
-    clearTimeout(longT);
-    longT = setTimeout(async () => {
-      if (down && !moved){
-        ping(down.px, down.py);
-        try { await api('/api/click', {mon:getMon(), x:down.x, y:down.y, button:'right'}); toast('Right click'); }
-        catch(err){ toast(err.message); }
-        down = null;
-      }
-    }, 550);
-  }, {passive:true});
+  }
+}
 
-  feed.addEventListener('touchmove', e => {
-    if (e.touches.length === 2 && pinchY !== null){
-      const y = (e.touches[0].clientY + e.touches[1].clientY)/2;
-      const dy = y - pinchY;
-      if (Math.abs(dy) > 14){ api('/api/scroll',{amount:Math.round(dy*6)}).catch(()=>{}); pinchY = y; }
+function closeDesktop(){
+  const fs = fsq('fs');
+  FS.on = false;
+  fsStopFeed();
+  fsq('fsKeys').blur();
+  fs.classList.remove('on');
+  clearTimeout(FS.barTimer);
+  try { if (document.fullscreenElement) document.exitFullscreen(); } catch(e){}
+  try { if (screen.orientation && screen.orientation.unlock)
+          screen.orientation.unlock(); } catch(e){}
+}
+
+function fsStartFeed(){
+  const feed = fsq('fsFeed');
+  const mon = fsq('fsMon').value || 0;
+  const q = fsq('fsQ').value || 'medium';
+  feed.src = `/api/stream?mon=${mon}&q=${q}&t=${Date.now()}`;
+  FS.frames = 0;
+  clearInterval(FS.fpsTimer);
+  FS.fpsTimer = setInterval(() => {
+    const s = fsq('fsStat');
+    if (s) s.textContent = FS.frames + ' fps';
+    FS.frames = 0;
+  }, 1000);
+  feed.onload = () => { FS.frames++; };
+}
+
+function fsStopFeed(){
+  const feed = fsq('fsFeed');
+  if (feed) feed.src = '';
+  clearInterval(FS.fpsTimer);
+}
+
+function setMode(m){
+  FS.mode = m;
+  const b = fsq('fsMode');
+  if (b){
+    b.textContent = m === 'pad' ? 'Trackpad' : 'Direct';
+    b.classList.toggle('on', m === 'pad');
+  }
+}
+
+function fsMon(){ return +(fsq('fsMon').value || 0); }
+
+/* Where did that touch land on the actual screen image?
+   object-fit:contain letterboxes the feed, so the visible picture is smaller
+   than the element and a raw offsetX would be wrong at the edges. */
+function fsNorm(cx, cy){
+  const feed = fsq('fsFeed');
+  const r = feed.getBoundingClientRect();
+  const nat = (feed.naturalWidth || 16) / (feed.naturalHeight || 9);
+  const box = r.width / r.height;
+  let w = r.width, h = r.height, ox = 0, oy = 0;
+  if (box > nat){ w = r.height * nat; ox = (r.width - w) / 2; }
+  else { h = r.width / nat; oy = (r.height - h) / 2; }
+  const x = cx - r.left - ox, y = cy - r.top - oy;
+  if (x < 0 || y < 0 || x > w || y > h) return null;
+  return { x: x / w, y: y / h, px: cx - r.left, py: cy - r.top };
+}
+
+function fsRing(px, py){
+  const r = fsq('fsRing');
+  if (!r) return;
+  r.style.left = px + 'px';
+  r.style.top = py + 'px';
+  r.animate([{opacity:.95, transform:'translate(-50%,-50%) scale(.4)'},
+             {opacity:0,   transform:'translate(-50%,-50%) scale(1.7)'}],
+            {duration:420, easing:'ease-out'});
+}
+
+/* Movement is accumulated and flushed once per frame. Posting every
+   pointermove would put 120 requests a second on the wire and the cursor
+   would lag behind the finger. */
+function padMove(dx, dy){
+  FS.dx += dx * PAD_SPEED;
+  FS.dy += dy * PAD_SPEED;
+  if (FS.pending) return;
+  FS.pending = true;
+  requestAnimationFrame(() => {
+    const x = FS.dx, y = FS.dy;
+    FS.dx = 0; FS.dy = 0; FS.pending = false;
+    if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) return;
+    api('/api/movepad', {dx:x, dy:y}).catch(() => {});
+  });
+}
+
+/* ---------- pointer ----------
+ * Pointer Events rather than touch events, so the same code drives a finger
+ * on a phone and a mouse in a desktop browser. Two live pointers means
+ * scroll; one means move or click depending on the mode.
+ */
+(function wireFsPointer(){
+  const fs = fsq('fs');
+  if (!fs) return;
+
+  const pts = new Map();
+  let longT = null, moved = false, start = null, scrollY = null;
+  let lastTap = 0, lastTapX = 0, lastTapY = 0;
+
+  const onChrome = t => t.closest('#fsBar') || t.closest('#fsKeysBar');
+
+  fs.addEventListener('pointerdown', e => {
+    if (onChrome(e.target)) return;         // let the toolbars work normally
+    // The toolbars auto-hide; the top strip is how you get them back.
+    if (e.clientY < 50){ fsBars(true); return; }
+
+    e.preventDefault();
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+    if (pts.size === 2){
+      clearTimeout(longT);
+      const v = [...pts.values()];
+      scrollY = (v[0].y + v[1].y) / 2;
       return;
     }
-    if (!down) return;
-    const p = norm(e.touches[0]); if (!p) return;
-    if (Math.hypot(p.px-down.px, p.py-down.py) > 12){ moved = true; down.to = p; }
-  }, {passive:true});
+    if (pts.size > 2) return;
 
-  feed.addEventListener('touchend', async () => {
-    clearTimeout(longT); pinchY = null;
-    if (!down) return;
-    const st = down; down = null;
+    start = {x:e.clientX, y:e.clientY, t:Date.now(), n:fsNorm(e.clientX, e.clientY)};
+    moved = false;
+    clearTimeout(longT);
+    longT = setTimeout(async () => {
+      if (!start || moved) return;
+      fsRing(start.x, start.y);
+      if (navigator.vibrate) navigator.vibrate(12);
+      try {
+        if (FS.mode === 'pad') await api('/api/tap', {button:'right'});
+        else if (start.n) await api('/api/click',
+          {mon:fsMon(), x:start.n.x, y:start.n.y, button:'right'});
+        fsToast('Right click', 900);
+      } catch(err){ fsToast(err.message); }
+      start = null;
+    }, 550);
+  });
+
+  fs.addEventListener('pointermove', e => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+
+    if (pts.size >= 2){
+      const v = [...pts.values()];
+      const y = (v[0].y + v[1].y) / 2;
+      if (scrollY !== null){
+        const d = y - scrollY;
+        // A wheel notch is 120; this makes a finger-length drag about a
+        // page, which is what two-finger scrolling feels like elsewhere.
+        if (Math.abs(d) > 6){
+          api('/api/scroll', {amount: Math.round(d * 8)}).catch(() => {});
+          scrollY = y;
+        }
+      }
+      return;
+    }
+
+    if (!start) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10){
+      moved = true;
+      clearTimeout(longT);
+    }
+    if (FS.mode === 'pad' && moved) padMove(dx, dy);
+  });
+
+  async function release(e){
+    pts.delete(e.pointerId);
+    if (pts.size < 2) scrollY = null;
+    if (pts.size > 0 || !start) { if (pts.size === 0) start = null; return; }
+
+    clearTimeout(longT);
+    const st = start; start = null;
+    const dt = Date.now() - st.t;
+
+    if (moved){
+      // Direct mode has real start and end coordinates, so a drag is a drag.
+      // Trackpad mode already moved the cursor as the finger moved.
+      if (FS.mode === 'direct' && st.n){
+        const end = fsNorm(e.clientX, e.clientY);
+        if (end) {
+          try { await api('/api/drag', {mon:fsMon(), x1:st.n.x, y1:st.n.y,
+                                        x2:end.x, y2:end.y}); }
+          catch(err){ fsToast(err.message); }
+        }
+      }
+      return;
+    }
+    if (dt > 400) return;                 // a slow press that was not a tap
+
+    const now = Date.now();
+    const dbl = now - lastTap < 320
+              && Math.hypot(st.x - lastTapX, st.y - lastTapY) < 32;
+    lastTap = now; lastTapX = st.x; lastTapY = st.y;
+
+    fsRing(st.x, st.y);
     try {
-      if (moved && st.to) await api('/api/drag',
-        {mon:getMon(), x1:st.x, y1:st.y, x2:st.to.x, y2:st.to.y});
-      else { ping(st.px, st.py); await api('/api/click', {mon:getMon(), x:st.x, y:st.y}); }
-    } catch(err){ toast(err.message); }
-  }, {passive:true});
+      if (FS.mode === 'pad') await api('/api/tap', {double: dbl});
+      else if (st.n) await api('/api/click',
+        {mon:fsMon(), x:st.n.x, y:st.n.y, double: dbl});
+    } catch(err){ fsToast(err.message); }
+  }
+
+  fs.addEventListener('pointerup', release);
+  fs.addEventListener('pointercancel', e => {
+    pts.delete(e.pointerId);
+    clearTimeout(longT);
+    if (pts.size === 0){ start = null; scrollY = null; }
+  });
+})();
+
+/* ---------- live typing ----------
+ * The off-screen input is the keyboard. Phone keyboards report keyCode 229
+ * for ordinary characters, so reading the VALUE on `input` is the only
+ * reliable way to know what was typed. Special keys do report properly, so
+ * those come from keydown - and must preventDefault, or Backspace would eat
+ * the input's own (empty) contents instead of reaching the PC.
+ */
+const FS_KEYS = {
+  Enter:'enter', Backspace:'backspace', Tab:'tab', Escape:'esc',
+  ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+  Delete:'delete', Home:'home', End:'end',
+  PageUp:'pageup', PageDown:'pagedown',
+};
+
+(function wireFsKeys(){
+  const box = fsq('fsKeys');
+  if (!box) return;
+
+  box.addEventListener('input', () => {
+    const text = box.value;
+    box.value = '';
+    if (!text) return;
+    api('/api/type', {text}).catch(err => fsToast(err.message));
+  });
+
+  box.addEventListener('keydown', e => {
+    const name = FS_KEYS[e.key];
+    const mods = [];
+    if (e.ctrlKey) mods.push('ctrl');
+    if (e.altKey) mods.push('alt');
+    if (e.shiftKey && name) mods.push('shift');
+    if (e.metaKey) mods.push('win');
+
+    if (name){
+      e.preventDefault();
+      api('/api/press', {name, mods}).catch(err => fsToast(err.message));
+      return;
+    }
+    // A real keyboard sending Ctrl+C: the character never reaches `input`,
+    // so it has to be caught here.
+    if ((e.ctrlKey || e.altKey || e.metaKey) && e.key.length === 1){
+      e.preventDefault();
+      api('/api/press', {name:e.key.toLowerCase(), mods})
+        .catch(err => fsToast(err.message));
+    }
+  });
+})();
+
+/* ---------- the toolbars ---------- */
+(function wireFsChrome(){
+  const bar = fsq('fsBar'), keys = fsq('fsKeysBar');
+  if (!bar) return;
+
+  fsq('fsClose').onclick = closeDesktop;
+  fsq('fsMon').onchange = fsStartFeed;
+  fsq('fsQ').onchange = fsStartFeed;
+
+  fsq('fsMode').onclick = () => {
+    setMode(FS.mode === 'pad' ? 'direct' : 'pad');
+    fsToast(FS.mode === 'pad'
+      ? 'Trackpad — drag to move, tap to click'
+      : 'Direct — tap where you want to click', 1800);
+    fsBars(true);
+  };
+
+  fsq('fsKb').onclick = () => {
+    const box = fsq('fsKeys');
+    if (document.activeElement === box){ box.blur(); fsq('fsKb').classList.remove('on'); }
+    else { box.focus(); fsq('fsKb').classList.add('on'); fsToast('Keyboard on', 1200); }
+    fsBars(true);
+  };
+
+  fsq('fsRight').onclick = async () => {
+    try {
+      if (FS.mode === 'pad') await api('/api/tap', {button:'right'});
+      else fsToast('In direct mode, press and hold where you want to right click', 2400);
+    } catch(err){ fsToast(err.message); }
+    fsBars(true);
+  };
+
+  keys.addEventListener('click', async e => {
+    const pr = e.target.closest('[data-press]');
+    const cb = e.target.closest('[data-combo]');
+    try {
+      if (pr) await api('/api/press', {name: pr.dataset.press});
+      else if (cb){
+        const parts = cb.dataset.combo.split('+');
+        await api('/api/press', {name: parts.pop(), mods: parts});
+      }
+    } catch(err){ fsToast(err.message); }
+    fsBars(true);
+  });
+
+  // Any toolbar touch keeps them up; they fade again 4s later.
+  [bar, keys].forEach(el =>
+    el.addEventListener('pointerdown', () => fsBars(true)));
+
+  // Leaving fullscreen by the system gesture or Esc should close the viewer
+  // too, rather than leaving a stream running behind the board.
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && FS.on && fsq('fs').classList.contains('on')
+        && document.visibilityState === 'visible'){
+      // Only when the user actually left fullscreen, not when we never got it.
+      if (FS._hadFs) closeDesktop();
+    }
+    FS._hadFs = !!document.fullscreenElement;
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && FS.on && document.activeElement !== fsq('fsKeys'))
+      closeDesktop();
+  });
+})();
+
+
+/* ================= my PCs =================
+ *
+ * Each PC is its own address, so each is its own browser origin - which
+ * means its own cookie, its own login and its own home-screen app. There is
+ * no way around that without one PC proxying the others, so switching is
+ * honest about what it is: a list of addresses, and tapping one goes there.
+ *
+ * What makes it bearable is that the session cookie lasts 30 days per PC, so
+ * after the first login on each, switching is a single tap.
+ *
+ * The list lives on the phone, not on the PC, because it is a property of
+ * the phone: your phone knows about your machines, and a friend's phone that
+ * you paired to one of them should not learn about the rest.
+ */
+const PCS_KEY = 'aether.pcs';
+
+function pcsLoad(){
+  try {
+    const raw = localStorage.getItem(PCS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter(p => p && p.url) : [];
+  } catch(e){ return []; }
 }
 
-$('#sheetBody').addEventListener('change', e => {
-  if (e.target.id === 'monSel' || e.target.id === 'qSel') startFeed();
-});
+function pcsSave(list){
+  try { localStorage.setItem(PCS_KEY, JSON.stringify(list.slice(0, 12))); }
+  catch(e){}
+}
+
+function pcsNormUrl(u){
+  u = String(u || '').trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
+  try {
+    const p = new URL(u);
+    if (!p.port && p.protocol === 'http:') p.port = '8787';
+    return p.origin + '/';
+  } catch(e){ return ''; }
+}
+
+function pcsHere(){ return location.origin + '/'; }
+
+/* Remember whichever PC we are actually looking at, so the list builds
+   itself as you pair phones rather than needing to be typed out. */
+async function pcsRemember(){
+  try {
+    const info = await api('/api/pairinfo');
+    const url = pcsNormUrl(info.url) || pcsHere();
+    const list = pcsLoad();
+    const mine = list.find(p => p.url === pcsHere() || p.url === url);
+    if (mine){
+      mine.name = info.pc || mine.name;
+      mine.url = pcsHere();
+    } else {
+      list.unshift({name: info.pc || 'This PC', url: pcsHere()});
+    }
+    pcsSave(list);
+  } catch(e){}
+}
+
+function openPCs(){
+  const list = pcsLoad();
+  const here = pcsHere();
+
+  const rows = list.map((p, i) => `
+    <div class="srow" data-pc="${i}" style="cursor:pointer">
+      <div style="width:9px;height:9px;border-radius:50%;flex:0 0 auto;
+        background:${p.url === here ? 'var(--good,#34d399)' : 'var(--line2)'}"></div>
+      <div style="flex-grow:1;min-width:0">
+        <div class="t">${esc(p.name || 'PC')}${p.url === here
+          ? ' <span style="color:var(--muted);font-size:11px">· you are here</span>' : ''}</div>
+        <div class="d" style="overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap">${esc(p.url)}</div>
+      </div>
+      ${p.url === here ? '' :
+        `<div data-rmpc="${i}" style="flex:0 0 auto;padding:6px 10px;
+           color:var(--bad);font-size:12px">Remove</div>`}
+    </div>`).join('');
+
+  openSheet('My PCs', `
+    <div style="margin-top:12px">
+      ${rows || '<div class="srow"><div class="d">No PCs saved yet.</div></div>'}
+    </div>
+
+    <div style="margin-top:16px">
+      <div class="t" style="margin-bottom:7px">Add another PC</div>
+      <input class="field" id="pcUrl" placeholder="100.x.x.x:8787"
+             autocomplete="off" autocapitalize="off" spellcheck="false"
+             inputmode="url">
+      <div class="btn wide pri" id="pcAdd" style="margin-top:9px">Check and add</div>
+      <div id="pcMsg" style="font-size:12px;color:var(--muted);
+        margin-top:9px;line-height:1.5">
+        Open Aether Remote on the other PC and use its tray menu &rarr;
+        <b>Pair a phone</b> to see its address.
+      </div>
+    </div>`,
+    `<div style="flex-grow:1;font-size:11px;color:var(--muted)">Each PC logs in
+      separately, then remembers you for 30 days</div>
+     <button class="btn" id="sheetClose">Done</button>`);
+}
+
 $('#sheetBody').addEventListener('click', async e => {
-  const pr = e.target.closest('[data-press]');
-  if (pr){ try { await api('/api/press', {name:pr.dataset.press}); } catch(x){ toast(x.message); } return; }
-  const cb = e.target.closest('[data-combo]');
-  if (cb){
-    const parts = cb.dataset.combo.split('+');
-    try { await api('/api/press', {name:parts.pop(), mods:parts}); } catch(x){ toast(x.message); }
+  const rm = e.target.closest('[data-rmpc]');
+  if (rm){
+    const list = pcsLoad();
+    list.splice(+rm.dataset.rmpc, 1);
+    pcsSave(list);
+    openPCs();
     return;
   }
-  if (e.target.closest('#sendType')){
-    const b = $('#typeBox');
-    if (b && b.value){
-      try { await api('/api/type', {text:b.value}); b.value=''; toast('Typed'); }
-      catch(x){ toast(x.message); }
+
+  const row = e.target.closest('[data-pc]');
+  if (row){
+    const p = pcsLoad()[+row.dataset.pc];
+    if (!p || p.url === pcsHere()) return;
+    toast('Switching to ' + (p.name || 'PC') + '…');
+    location.href = p.url;
+    return;
+  }
+
+  if (e.target.closest('#pcAdd')){
+    const box = $('#pcUrl'), msg = $('#pcMsg');
+    const url = pcsNormUrl(box.value);
+    if (!url){ msg.textContent = 'That does not look like an address.'; return; }
+    if (url === pcsHere()){ msg.textContent = 'That is this PC.'; return; }
+    if (pcsLoad().some(p => p.url === url)){
+      msg.textContent = 'Already in the list.'; return;
+    }
+
+    msg.textContent = 'Checking…';
+    // /ping is the one route that answers cross-origin. A reachable Aether
+    // Remote answers it with its own name; anything else fails here rather
+    // than after it has been saved and tapped.
+    // A wrong address does not refuse the connection, it hangs - the browser
+    // will sit on an unroutable IP far longer than anyone will wait, and the
+    // screen would just say "Checking..." forever. Give up after 6 seconds
+    // and say so.
+    const ac = new AbortController();
+    const bail = setTimeout(() => ac.abort(), 6000);
+    try {
+      const r = await fetch(url + 'ping', {cache:'no-store', signal:ac.signal});
+      const j = await r.json();
+      if (!j || j.app !== 'remote') throw new Error('not an Aether Remote');
+      const list = pcsLoad();
+      list.push({name: j.pc || 'PC', url});
+      pcsSave(list);
+      openPCs();
+      toast('Added ' + (j.pc || 'PC'));
+    } catch(err){
+      msg.innerHTML = 'Could not reach it. Check the PC is on, the address is '
+        + 'right, and your phone is on the same network or tailnet as it.';
+    } finally {
+      clearTimeout(bail);
     }
   }
 });
+
+/* The title is the switcher. A caret appears only once there is somewhere
+   else to go, so a one-PC user never sees an affordance that does nothing. */
+function pcsMarkTitle(){
+  const t = $('#title');
+  if (!t) return;
+  const many = pcsLoad().length > 1;
+  t.style.cursor = 'pointer';
+  const name = t.textContent.replace(/\s*▾$/, '');
+  t.textContent = many ? name + ' ▾' : name;
+}
+
+// Always opens: with one PC saved it is still where you add the second.
+$('#title').addEventListener('click', openPCs);
 
 /* ================= boot ================= */
 async function loadLayout(){
@@ -1381,6 +1810,7 @@ async function poll(){
     board.innerHTML = `<div style="padding:40px 10px;text-align:center;color:var(--muted)">
       ${esc(e.message)}</div>`;
   }
+  pcsRemember().then(pcsMarkTitle).catch(() => {});
   setInterval(poll, 2500);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 })();

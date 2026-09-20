@@ -348,16 +348,55 @@ def scan_xbox():
 
 # -------------------------------------------------------------- start menu
 
-def scan_start_menu():
-    """Everything else he has - the .lnk files Windows already curates."""
+# Windows' own tool drawers. Almost nothing in them is something you would
+# want on a phone remote - Character Map, ODBC Data Sources, Application
+# Verifier - so they are dropped wholesale, and the handful people do reach
+# for are named individually below.
+SYSTEM_FOLDERS = {
+    "accessories", "accessibility", "administrative tools",
+    "windows administrative tools", "windows accessories", "windows system",
+    "windows powershell", "windows kits", "system tools", "maintenance",
+    "startup", "microsoft office tools", "windows ease of access",
+}
+
+# The exceptions - the ones people actually ask a remote for. Character Map
+# and friends are deliberately NOT here.
+SYSTEM_KEEP = {
+    "task manager", "control panel", "run", "command prompt",
+    "file explorer", "this pc", "remote desktop connection",
+    "snipping tool", "calculator", "notepad", "paint",
+    "windows terminal", "windows security", "registry editor",
+    "disk cleanup", "event viewer",
+}
+
+# Documentation, samples and the little settings utilities that ship beside
+# a real app. "Batch Standards Checker" and "MSI Afterburner localization
+# reference" are not apps anyone launches from their phone.
+NOISE = re.compile(
+    r"uninstall|readme|help|documentation|website|user guide|manual|"
+    r"repair|licen[cs]e|changelog|report a|feedback|"
+    r"^visual studio installer$|"
+    r"\b(reference|references|samples?|faq|release notes|revision history)$|"
+    r"example scripts|module docs|localization|skin format|"
+    r"settings wizard|migrate from|reset settings|"
+    r"\b(export|import)\b.*\bsettings\b|"
+    r"(native|cross) tools command prompt|developer (command prompt|powershell)|"
+    r"command prompt for vs|install additional tools|"
+    r"\bverifier\b|\btelemetry\b|language preferences|spreadsheet compare|"
+    r"recording manager|check for updates|background downloader|"
+    r"standards checker|performance test|property tab builder|"
+    r"costing template|add-ins manager|sample (desktop|uwp) apps",
+    re.I)
+
+
+def scan_start_menu(include_system=False):
+    """The .lnk files Windows already curates, minus the parts it curates
+    badly. `include_system` puts the Windows tool drawers back."""
     dirs = [
         os.path.join(USERPROFILE, r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs"),
         os.path.join(PROGRAMDATA, r"Microsoft\Windows\Start Menu\Programs"),
     ]
-    noise = re.compile(
-        r"uninstall|readme|help|documentation|website|user guide|manual|"
-        r"repair|licen[cs]e|changelog|report a|feedback|^visual studio installer$",
-        re.I)
+    noise = NOISE
 
     out = []
     seen = set()
@@ -365,13 +404,23 @@ def scan_start_menu():
         if not os.path.isdir(d):
             continue
         for root, _dirs, files in os.walk(d):
+            # Which folder under Programs\ is this? That is what separates
+            # "software you installed" from "Windows' own tool drawer".
+            rel = os.path.relpath(root, d)
+            top = "" if rel == "." else rel.split(os.sep)[0].lower()
+            sysfolder = top in SYSTEM_FOLDERS
+
             for fn in files:
                 if not fn.lower().endswith(".lnk"):
                     continue
                 base = os.path.splitext(fn)[0]
-                if noise.search(base) or base.lower() in seen:
+                low = base.lower()
+
+                if sysfolder and not include_system and low not in SYSTEM_KEEP:
                     continue
-                seen.add(base.lower())
+                if noise.search(base) or low in seen:
+                    continue
+                seen.add(low)
                 out.append({
                     "id": "lnk-%s" % re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-"),
                     "name": base,
@@ -409,7 +458,10 @@ def custom_apps():
     return out
 
 
-def scan_all(include_start_menu=True):
+def scan_all(include_start_menu=True, include_system=False):
+    """include_system=True keeps Windows' own tool drawers (Character Map,
+    ODBC Data Sources and the rest). Off by default because they bury the
+    apps you actually want under a few hundred entries you do not."""
     items = list(custom_apps())
     for fn in (scan_steam, scan_epic, scan_ubisoft, scan_xbox):
         try:
@@ -418,7 +470,7 @@ def scan_all(include_start_menu=True):
             pass
     if include_start_menu:
         try:
-            items.extend(scan_start_menu())
+            items.extend(scan_start_menu(include_system=include_system))
         except Exception:
             pass
 

@@ -364,7 +364,15 @@ class Handler(BaseHTTPRequestHandler):
         path = u.path.rstrip("/") or "/"
 
         if path == "/ping":
-            return self._send(200, {"ok": True, "app": "remote"})
+            # The only route that answers cross-origin, and deliberately so:
+            # the phone's "add a PC" screen has to check an address belongs to
+            # an Aether Remote before saving it, and that check is made from a
+            # page served by a DIFFERENT PC. Nothing here is authenticated and
+            # nothing here is private - it is a liveness probe. Every other
+            # route stays same-origin.
+            return self._send(200, {"ok": True, "app": "remote",
+                                    "pc": auth.ACCOUNT},
+                              extra={"Access-Control-Allow-Origin": "*"})
 
         # Icons and the manifest are needed by the login page and by
         # "Add to Home Screen", both of which happen before any session.
@@ -541,6 +549,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/movepad":
                 stream.move_relative(float(b.get("dx", 0)), float(b.get("dy", 0)))
                 return self._send(200, {"ok": True})
+
+            if path == "/api/tap":
+                # Trackpad mode: click where the cursor already is. Sending
+                # coordinates here would undo the positioning the user just
+                # did with movepad.
+                return self._send(200, stream.click_here(
+                    b.get("button", "left"), bool(b.get("double"))))
 
             if path == "/api/drag":
                 stream.drag(int(b.get("mon", 0)),

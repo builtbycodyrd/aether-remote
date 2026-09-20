@@ -24,10 +24,12 @@ import sys
 import time
 import winreg
 
-APP = "Aether Remote"
+try:
+    from version import VERSION, PUBLISHER, APP_NAME as APP
+except Exception:                      # running from a stripped copy
+    VERSION, PUBLISHER, APP = "0.0.0", "builtbycodyrd", "Aether Remote"
+
 EXE = "AetherRemote.exe"
-PUBLISHER = "builtbycodyrd"
-VERSION = "1.0.0"
 
 LOCAL = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
 TARGET = os.path.join(LOCAL, "Programs", APP)
