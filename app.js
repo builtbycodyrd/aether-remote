@@ -2000,6 +2000,9 @@ $('#title').addEventListener('click', openPCs);
 async function openTools(){
   openSheet('Tools', `
     <div style="margin-top:12px">
+      <div class="btn wide" id="openFiles">📁 Browse the PC&rsquo;s files</div>
+    </div>
+    <div style="margin-top:18px">
       <div class="t" style="margin-bottom:7px">PC clipboard</div>
       <textarea class="field" id="clipFrom" readonly rows="3"
         placeholder="Whatever is copied on the PC shows here"
@@ -2019,6 +2022,8 @@ async function openTools(){
     <div id="clipMsg" style="font-size:12px;color:var(--muted);margin-top:10px;
       line-height:1.5"></div>`,
     `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
+
+  $('#openFiles').addEventListener('click', () => openFiles(''));
 
   const msg = (m) => { const e = $('#clipMsg'); if (e) e.textContent = m; };
 
@@ -2056,6 +2061,70 @@ async function openTools(){
   catch(e){}
 }
 $('#toolsBtn').addEventListener('click', openTools);
+
+/* A read-only file browser. Tap a folder to go in, tap a file to download it
+   to the phone. There is no upload or write path anywhere - the server only
+   lists and streams. */
+function fsize(n){
+  if (n == null) return '';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0; while (n >= 1024 && i < u.length-1){ n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
+}
+
+async function openFiles(path){
+  let data;
+  try { data = await api('/api/files?p=' + encodeURIComponent(path || '')); }
+  catch(e){ toast(e.message); return; }
+
+  const crumb = data.path
+    ? esc(data.path)
+    : 'Pick a drive or folder';
+  const rows = (data.entries || []).map(en => en.dir
+    ? `<div class="srow" data-dir="${esc(en.path)}" style="cursor:pointer">
+         <div style="flex:0 0 auto">📁</div>
+         <div class="t" style="flex-grow:1;min-width:0;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap">${esc(en.name)}</div>
+         <div class="d">›</div>
+       </div>`
+    : `<div class="srow" data-file="${esc(en.path)}" data-name="${esc(en.name)}"
+         style="cursor:pointer">
+         <div style="flex:0 0 auto">📄</div>
+         <div style="flex-grow:1;min-width:0;overflow:hidden">
+           <div class="t" style="overflow:hidden;text-overflow:ellipsis;
+             white-space:nowrap">${esc(en.name)}</div>
+           <div class="d">${fsize(en.size)}</div></div>
+         <div class="d">⬇</div>
+       </div>`).join('');
+
+  openSheet('Files', `
+    <div style="font-size:11.5px;color:var(--muted);margin:10px 0;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${crumb}</div>
+    <div>${rows || '<div class="srow"><div class="d">Empty folder.</div></div>'}</div>
+    ${data.error ? `<div style="color:var(--bad);font-size:12px;margin-top:8px">${esc(data.error)}</div>` : ''}`,
+    `<button class="btn" id="filesUp" ${data.up == null && !data.path ? 'disabled' : ''}>Up</button>
+     <div style="flex-grow:1"></div>
+     <button class="btn" id="filesTools">Tools</button>`);
+
+  $('#filesUp').addEventListener('click', () => openFiles(data.up || ''));
+  $('#filesTools').addEventListener('click', openTools);
+
+  $('#sheetBody').querySelectorAll('[data-dir]').forEach(el =>
+    el.addEventListener('click', () => openFiles(el.dataset.dir)));
+
+  $('#sheetBody').querySelectorAll('[data-file]').forEach(el =>
+    el.addEventListener('click', () => {
+      // An <a download> is the reliable way to pull a binary on a phone;
+      // navigating the PWA itself would leave the app.
+      const a = document.createElement('a');
+      a.href = '/api/download?p=' + encodeURIComponent(el.dataset.file);
+      a.download = el.dataset.name || '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast('Downloading ' + (el.dataset.name || 'file') + '…');
+    }));
+}
 
 /* ================= boot ================= */
 async function loadLayout(){

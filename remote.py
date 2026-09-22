@@ -22,7 +22,7 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -536,6 +536,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/browse":
                 return self._send(200, self._browse(qs.get("p", [""])[0]))
 
+            if path == "/api/files":
+                return self._send(200, self._files(qs.get("p", [""])[0]))
+
+            if path == "/api/download":
+                return self._download(qs.get("p", [""])[0])
+
             if path == "/api/update":
                 # Cached: the page polls this, GitHub does not need to hear
                 # about it more than once a day.
@@ -1021,6 +1027,81 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "no permission to read that folder"}
         return {"path": p, "up": os.path.dirname(p) or None,
                 "entries": entries[:600]}
+
+    def _files(self, p):
+        """Directory listing for the phone's Files tab: folders and ALL files
+        with their sizes. Download-only - there is no write path anywhere."""
+        if not p:
+            roots = []
+            for d in ("C:\\", "D:\\", "E:\\"):
+                if os.path.isdir(d):
+                    roots.append({"name": d, "path": d, "dir": True})
+            for name in ("Desktop", "Downloads", "Documents", "Pictures",
+                         "Videos", "Music"):
+                d = os.path.join(os.environ.get("USERPROFILE", ""), name)
+                if os.path.isdir(d):
+                    roots.append({"name": name, "path": d, "dir": True})
+            return {"path": "", "up": None, "entries": roots}
+
+        p = os.path.abspath(p)
+        if not os.path.isdir(p):
+            return {"path": p, "up": os.path.dirname(p) or None, "entries": []}
+
+        dirs, files = [], []
+        try:
+            for name in sorted(os.listdir(p), key=str.lower):
+                full = os.path.join(p, name)
+                try:
+                    if os.path.isdir(full):
+                        if name.startswith("$"):
+                            continue
+                        dirs.append({"name": name, "path": full, "dir": True})
+                    elif os.path.isfile(full):
+                        files.append({"name": name, "path": full, "dir": False,
+                                      "size": os.path.getsize(full)})
+                except OSError:
+                    continue
+        except PermissionError:
+            return {"path": p, "up": os.path.dirname(p) or None, "entries": [],
+                    "error": "no permission to read that folder"}
+        return {"path": p, "up": os.path.dirname(p) or None,
+                "entries": (dirs + files)[:1500]}
+
+    def _download(self, p):
+        """Stream one file to the phone as an attachment. Read-only, and the
+        only thing it can do is hand back bytes that already exist on disk."""
+        p = os.path.abspath(p)
+        if not os.path.isfile(p):
+            return self._send(404, {"error": "no such file"})
+        try:
+            size = os.path.getsize(p)
+            f = open(p, "rb")
+        except OSError as e:
+            return self._send(403, {"error": str(e)})
+
+        name = os.path.basename(p)
+        ascii_name = name.encode("ascii", "replace").decode("ascii") \
+            .replace('"', "")
+        disp = ("attachment; filename=\"%s\"; filename*=UTF-8''%s"
+                % (ascii_name, quote(name)))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", disp)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            with f:
+                while True:
+                    chunk = f.read(262144)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        log("download %s (%d bytes)" % (name, size))
+        return None
 
     def _addapp(self, b):
         """Turn a browsed .exe into a library entry so a tile can use it."""
