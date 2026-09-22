@@ -1882,6 +1882,17 @@ async function pcsRemember(){
       list.unshift({name: info.pc || 'This PC', url: pcsHere()});
     }
     pcsSave(list);
+    // Grab this PC's MAC so Wake-on-LAN can find it later, when it's asleep
+    // and we can only ask another device (the Pi) to send the magic packet.
+    try {
+      const w = await api('/api/wol/info');
+      const mac = w && w.primary && w.primary.mac;
+      if (mac){
+        const l2 = pcsLoad();
+        const m2 = l2.find(p => p.url === pcsHere());
+        if (m2 && m2.mac !== mac){ m2.mac = mac; pcsSave(l2); }
+      }
+    } catch(e){}
   } catch(e){}
 }
 
@@ -1897,7 +1908,7 @@ function openPCs(editIdx){
       // This row is being renamed: the name becomes an input. The hostname
       // is the placeholder, so clearing the box and saving falls back to it.
       return `
-    <div class="srow">
+    <div class="srow" style="flex-wrap:wrap">
       ${dot(p.url === here)}
       <div style="flex-grow:1;min-width:0;display:flex;gap:7px">
         <input class="field" id="pcAlias" value="${esc(p.alias || '')}"
@@ -1906,6 +1917,16 @@ function openPCs(editIdx){
           style="flex-grow:1;min-width:0">
         <button class="btn pri" data-savepc="${i}">Save</button>
         <button class="btn" data-cancelpc="1">Cancel</button>
+      </div>
+      <div style="flex-basis:100%;margin-top:8px">
+        <div class="d" style="margin-bottom:5px">Wake sender — the address of your
+          always-on Pi that turns this PC on. Leave blank if you don't use Wake on LAN.</div>
+        <input class="field" id="pcPi" value="${esc(p.pi || '')}"
+          placeholder="192.168.x.x" autocomplete="off" autocapitalize="off"
+          spellcheck="false" inputmode="url" style="width:100%">
+        <div class="d" style="margin-top:5px">MAC: ${p.mac
+          ? '<code>' + esc(p.mac) + '</code>'
+          : 'not captured yet — open this remote once while on this PC'}</div>
       </div>
     </div>`;
     }
@@ -1918,8 +1939,11 @@ function openPCs(editIdx){
         <div class="d" style="overflow:hidden;text-overflow:ellipsis;
           white-space:nowrap">${esc(p.url)}</div>
       </div>
+      ${p.url !== here && p.pi && p.mac ?
+        `<div data-wakepc="${i}" style="flex:0 0 auto;padding:6px 9px;
+           color:var(--good,#34d399);font-size:12px">Wake</div>` : ''}
       <div data-editpc="${i}" style="flex:0 0 auto;padding:6px 9px;
-        color:var(--muted);font-size:12px">Rename</div>
+        color:var(--muted);font-size:12px">Edit</div>
       ${p.url === here ? '' :
         `<div data-rmpc="${i}" style="flex:0 0 auto;padding:6px 9px;
            color:var(--bad);font-size:12px">Remove</div>`}
@@ -1972,10 +1996,31 @@ $('#sheetBody').addEventListener('click', async e => {
       // Empty means "just use the real name" - so we clear the alias rather
       // than store a blank one.
       if (v) p.alias = v; else delete p.alias;
+      const pi = ($('#pcPi') ? $('#pcPi').value : '').trim().slice(0, 80);
+      if (pi) p.pi = pi; else delete p.pi;
       pcsSave(list);
     }
     openPCs();
     if (p && p.url === pcsHere()) pcsMarkTitle();
+    return;
+  }
+
+  const wake = e.target.closest('[data-wakepc]');
+  if (wake){
+    const p = pcsLoad()[+wake.dataset.wakepc];
+    if (!p || !p.pi || !p.mac) return;
+    let host = String(p.pi).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (!/:\d+$/.test(host)) host += ':8788';
+    wake.textContent = 'Waking…';
+    try {
+      const r = await fetch('http://' + host + '/wake?mac=' + encodeURIComponent(p.mac),
+                            { cache: 'no-store' });
+      if (!r.ok) throw new Error('bad');
+      toast('Wake sent to ' + pcsDisp(p) + ' — give it a moment to boot.');
+    } catch(err){
+      toast("Couldn't reach the Pi at " + host + '.');
+    }
+    wake.textContent = 'Wake';
     return;
   }
 

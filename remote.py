@@ -40,6 +40,7 @@ import stream   # noqa: E402
 import library  # noqa: E402
 import layout   # noqa: E402
 import update   # noqa: E402
+import wol      # noqa: E402
 
 
 # The scan takes ~1.3s, so cache it and refresh on demand rather than on
@@ -556,6 +557,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/apps":
                 return self._send(200, {"apps": sysctl.running_windows()})
 
+            if path == "/api/wol/info":
+                return self._send(200, {"primary": wol.primary(),
+                                        "adapters": wol.adapters()})
+
+            if path == "/api/wol/piscript":
+                return self._send(200, wol.PI_SCRIPT,
+                                  "text/plain; charset=utf-8")
+
             return self._send(404, {"error": "no such path"})
         except Exception as e:
             log("GET %s failed: %s\n%s" % (path, e, traceback.format_exc()))
@@ -628,6 +637,16 @@ class Handler(BaseHTTPRequestHandler):
                 r = sysctl.end_task(b.get("pid"))
                 log("end task pid=%s -> %s" % (b.get("pid"), r.get("ok")))
                 return self._send(200 if r.get("ok") else 400, r)
+
+            if path == "/api/wol/send":
+                # This PC sends a magic packet on its LAN - the fallback for
+                # when another Aether PC on the same network is awake. The Pi
+                # is the usual sender and the phone calls it directly.
+                try:
+                    wol.send_wol(str(b.get("mac", "")))
+                    return self._send(200, {"ok": True})
+                except Exception as e:
+                    return self._send(400, {"ok": False, "error": str(e)})
 
             # ---- desktop input ----
             if path == "/api/click":

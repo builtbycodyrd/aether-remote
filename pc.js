@@ -642,6 +642,57 @@ function viewSettings(){
     </div>
 
     <div class="card">
+      <h3>Wake on LAN</h3>
+      <div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:12px">
+        Let your phone turn this PC on when it's asleep or off. The phone can't
+        reach a sleeping PC directly, so a small always-on device on your network
+        — your Raspberry Pi 400 is perfect — sends the wake signal for it.
+      </div>
+      <label class="row"><div class="t">This PC's network card
+        <div class="d" id="wolNic">Looking…</div></div></label>
+      <label class="row"><div class="t">MAC address
+        <div class="d">The phone stores this so the Pi knows what to wake.</div></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="wolMac" readonly style="width:170px;font-family:ui-monospace,monospace">
+          <button class="btn sm" id="wolCopy">Copy</button>
+        </div></label>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600">Step 1 — turn on Wake on LAN in Windows</summary>
+        <div class="muted" style="font-size:12.5px;line-height:1.7;margin:10px 0 4px">
+          Device Manager → Network adapters → your Ethernet card → Properties →
+          <b>Power Management</b>: tick <i>Allow this device to wake the computer</i>
+          and <i>Only allow a magic packet…</i>. On the <b>Advanced</b> tab, set
+          <i>Wake on Magic Packet</i> to Enabled. Many PCs also need
+          <i>Wake-on-LAN</i> (or ErP/Deep Sleep off) enabled in the BIOS.
+          Wake works best over <b>wired Ethernet</b>.
+        </div>
+      </details>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer;font-weight:600">Step 2 — set up the Raspberry Pi sender</summary>
+        <div class="muted" style="font-size:12.5px;line-height:1.7;margin:10px 0 4px">
+          On the Pi (same network as this PC), save the script and run it as a
+          service. Then in the phone app's PC switcher, put the Pi's address in
+          the PC's <i>Wake sender</i> field. The phone's Wake button calls the Pi.
+          <ol style="margin:10px 0 0 18px;padding:0;line-height:1.9">
+            <li>Download <code>aether-wake.py</code> below to the Pi
+              (e.g. <code>/home/pi/aether-wake.py</code>).</li>
+            <li>Create the service:
+              <code>sudo nano /etc/systemd/system/aether-wake.service</code>
+              and paste the unit shown below.</li>
+            <li><code>sudo systemctl enable --now aether-wake</code></li>
+            <li>Check it: open <code>http://&lt;pi-ip&gt;:8788/ping</code> in a browser.</li>
+          </ol>
+        </div>
+        <div style="display:flex;gap:8px;margin:12px 0 8px">
+          <button class="btn sm" id="wolDl">Download aether-wake.py</button>
+          <button class="btn sm" id="wolUnit">Copy the service unit</button>
+        </div>
+        <pre id="wolUnitBox" style="display:none;white-space:pre-wrap;background:#0b0a18;
+          border-radius:10px;padding:12px;font-size:11.5px;overflow:auto"></pre>
+      </details>
+    </div>
+
+    <div class="card">
       <h3>Version</h3>
       <label class="row"><div class="t"><span id="verLine">—</span>
         <div class="d" id="verNote">Checking…</div></div>
@@ -653,6 +704,52 @@ function viewSettings(){
     $('#port').value = s.port;
     $('#autostart').checked = !!s.autostart;
     $('#autoNote').textContent = s.autostartDetail || '';
+  });
+
+  // ---- Wake on LAN ----
+  const wolUnit =
+    '[Unit]\n' +
+    'Description=Aether wake sender\n' +
+    'After=network-online.target\n' +
+    'Wants=network-online.target\n\n' +
+    '[Service]\n' +
+    'ExecStart=/usr/bin/python3 /home/pi/aether-wake.py\n' +
+    'Restart=always\n' +
+    'User=pi\n\n' +
+    '[Install]\n' +
+    'WantedBy=multi-user.target\n';
+  api('/api/wol/info').then(w => {
+    const p = w && w.primary;
+    if (!$('#wolMac')) return;               // view changed while we waited
+    if (p){
+      $('#wolNic').textContent = p.desc || p.name || 'Ethernet';
+      $('#wolMac').value = p.mac || '';
+    } else {
+      $('#wolNic').textContent = 'No wired network card found.';
+    }
+  }).catch(() => { const n = $('#wolNic'); if (n) n.textContent = 'Could not read the network card.'; });
+  $('#wolCopy').addEventListener('click', () => {
+    $('#wolMac').select(); document.execCommand('copy'); toast('MAC copied');
+  });
+  $('#wolDl').addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/wol/piscript');
+      const txt = await r.text();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([txt], { type: 'text/x-python' }));
+      a.download = 'aether-wake.py';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    } catch(e){ toast('Download failed'); }
+  });
+  $('#wolUnit').addEventListener('click', () => {
+    const box = $('#wolUnitBox');
+    box.textContent = wolUnit;
+    box.style.display = 'block';
+    const sel = document.getSelection(), rng = document.createRange();
+    rng.selectNodeContents(box); sel.removeAllRanges(); sel.addRange(rng);
+    document.execCommand('copy'); sel.removeAllRanges();
+    toast('Service unit copied');
   });
 
   // The way back in after someone has hidden a version with the X.
