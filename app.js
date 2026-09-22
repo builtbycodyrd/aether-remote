@@ -1800,6 +1800,21 @@ function pcsNormUrl(u){
 
 function pcsHere(){ return location.origin + '/'; }
 
+/* What to CALL a PC. `alias` is a name you typed - "Cody's PC" - and it wins
+   over `name`, which is the machine's real hostname pulled off the PC. The
+   alias lives only on this phone and never touches the actual device name;
+   it is purely how this remote presents it to you. */
+function pcsDisp(p){
+  return (p && p.alias && p.alias.trim()) || (p && p.name) || 'PC';
+}
+
+/* The name for the PC we are looking at right now, for the header subtitle,
+   so a rename shows up there too and not only inside the switcher. */
+function pcsCurrentName(fallback){
+  const p = pcsLoad().find(x => x.url === pcsHere());
+  return (p && p.alias && p.alias.trim()) || fallback;
+}
+
 /* Remember whichever PC we are actually looking at, so the list builds
    itself as you pair phones rather than needing to be typed out. */
 async function pcsRemember(){
@@ -1818,24 +1833,46 @@ async function pcsRemember(){
   } catch(e){}
 }
 
-function openPCs(){
+function openPCs(editIdx){
   const list = pcsLoad();
   const here = pcsHere();
 
-  const rows = list.map((p, i) => `
+  const dot = (on) => `<div style="width:9px;height:9px;border-radius:50%;
+    flex:0 0 auto;background:${on ? 'var(--good,#34d399)' : 'var(--line2)'}"></div>`;
+
+  const rows = list.map((p, i) => {
+    if (i === editIdx){
+      // This row is being renamed: the name becomes an input. The hostname
+      // is the placeholder, so clearing the box and saving falls back to it.
+      return `
+    <div class="srow">
+      ${dot(p.url === here)}
+      <div style="flex-grow:1;min-width:0;display:flex;gap:7px">
+        <input class="field" id="pcAlias" value="${esc(p.alias || '')}"
+          placeholder="${esc(p.name || 'PC')}" autocomplete="off"
+          autocapitalize="words" spellcheck="false"
+          style="flex-grow:1;min-width:0">
+        <button class="btn pri" data-savepc="${i}">Save</button>
+        <button class="btn" data-cancelpc="1">Cancel</button>
+      </div>
+    </div>`;
+    }
+    return `
     <div class="srow" data-pc="${i}" style="cursor:pointer">
-      <div style="width:9px;height:9px;border-radius:50%;flex:0 0 auto;
-        background:${p.url === here ? 'var(--good,#34d399)' : 'var(--line2)'}"></div>
+      ${dot(p.url === here)}
       <div style="flex-grow:1;min-width:0">
-        <div class="t">${esc(p.name || 'PC')}${p.url === here
+        <div class="t">${esc(pcsDisp(p))}${p.url === here
           ? ' <span style="color:var(--muted);font-size:11px">· you are here</span>' : ''}</div>
         <div class="d" style="overflow:hidden;text-overflow:ellipsis;
           white-space:nowrap">${esc(p.url)}</div>
       </div>
+      <div data-editpc="${i}" style="flex:0 0 auto;padding:6px 9px;
+        color:var(--muted);font-size:12px">Rename</div>
       ${p.url === here ? '' :
-        `<div data-rmpc="${i}" style="flex:0 0 auto;padding:6px 10px;
+        `<div data-rmpc="${i}" style="flex:0 0 auto;padding:6px 9px;
            color:var(--bad);font-size:12px">Remove</div>`}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   openSheet('My PCs', `
     <div style="margin-top:12px">
@@ -1869,11 +1906,32 @@ $('#sheetBody').addEventListener('click', async e => {
     return;
   }
 
+  const edit = e.target.closest('[data-editpc]');
+  if (edit){ openPCs(+edit.dataset.editpc); return; }
+
+  if (e.target.closest('[data-cancelpc]')){ openPCs(); return; }
+
+  const save = e.target.closest('[data-savepc]');
+  if (save){
+    const list = pcsLoad();
+    const p = list[+save.dataset.savepc];
+    if (p){
+      const v = ($('#pcAlias').value || '').trim().slice(0, 40);
+      // Empty means "just use the real name" - so we clear the alias rather
+      // than store a blank one.
+      if (v) p.alias = v; else delete p.alias;
+      pcsSave(list);
+    }
+    openPCs();
+    if (p && p.url === pcsHere()) pcsMarkTitle();
+    return;
+  }
+
   const row = e.target.closest('[data-pc]');
   if (row){
     const p = pcsLoad()[+row.dataset.pc];
     if (!p || p.url === pcsHere()) return;
-    toast('Switching to ' + (p.name || 'PC') + '…');
+    toast('Switching to ' + pcsDisp(p) + '…');
     location.href = p.url;
     return;
   }
@@ -1905,7 +1963,7 @@ $('#sheetBody').addEventListener('click', async e => {
       list.push({name: j.pc || 'PC', url});
       pcsSave(list);
       openPCs();
-      toast('Added ' + (j.pc || 'PC'));
+      toast('Added ' + (j.pc || 'PC') + ' — tap Rename to give it your own name');
     } catch(err){
       msg.innerHTML = 'Could not reach it. Check the PC is on, the address is '
         + 'right, and your phone is on the same network or tailnet as it.';
@@ -1940,7 +1998,8 @@ async function poll(){
     if (draggingSlider || Date.now() < suppressUntil) return;
     S = await api('/api/state');
     $('#dot').className = 'dot';
-    $('#meta').textContent = S.time + ' · ' + S.device;
+    // The alias (if you set one) wins over the machine's hostname here too.
+    $('#meta').textContent = S.time + ' · ' + pcsCurrentName(S.device);
     refresh();          // in place - never a full rebuild, or it flickers
   } catch(e){ $('#dot').className = 'dot off'; }
 }
