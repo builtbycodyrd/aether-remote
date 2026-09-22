@@ -811,8 +811,21 @@ class Handler(BaseHTTPRequestHandler):
             cmd = known_launches().get(ref)
             if not cmd:
                 return self._send(400, {"error": "not in the library"})
-            sysctl.run_detached(self._launch_cmd(cmd))
-            log("launch %s" % ref)
+            launch_cmd = self._launch_cmd(cmd)
+            # A tile may carry pre-launch actions ("set volume to 40, then
+            # launch"). Look them up on the saved tile by its id - never from
+            # the phone's payload - then run them and launch, off-thread so a
+            # Wait step doesn't hold the request open.
+            actions = self._tile_actions(str(b.get("id", "")))
+            if actions:
+                def _pre():
+                    self._run_steps(actions, "launch %s" % ref)
+                    sysctl.run_detached(launch_cmd)
+                threading.Thread(target=_pre, daemon=True).start()
+                log("launch %s (%d pre-actions)" % (ref, len(actions)))
+            else:
+                sysctl.run_detached(launch_cmd)
+                log("launch %s" % ref)
             return self._send(200, {"ok": True})
 
         if kind == "action":
@@ -853,6 +866,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(400, {"error": "unknown tile kind"})
 
     @staticmethod
+    def _tile_actions(tile_id):
+        """The saved pre-launch actions for a tile, found by its id. Returns
+        [] for anything unknown - the id comes from the phone, so it only ever
+        selects one of OUR tiles; it can never carry an action of its own."""
+        if not tile_id:
+            return []
+        lay = layout.load(library_items())
+        for sec in lay.get("sections", []):
+            for t in sec.get("tiles", []):
+                if t.get("id") == tile_id and t.get("kind") in ("app", "game"):
+                    return t.get("actions") or []
+        return []
+
+    @staticmethod
     def _launch_cmd(cmd):
         """steam:// and other protocol urls need the shell to open them."""
         if "://" in cmd and not cmd.lower().startswith(("cmd", "powershell")):
@@ -890,7 +917,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, clean)
 
     def _run_scene(self, scene):
-        for i, step in enumerate(scene.get("steps", [])):
+        self._run_steps(scene.get("steps", []), scene.get("name"))
+
+    def _run_steps(self, steps, name=""):
+        """Execute a list of steps in order. Used by scenes AND by a tile's
+        pre-launch actions - one executor, so they can never drift apart."""
+        for i, step in enumerate(steps):
             op = step.get("op")
             try:
                 if op == "volume":
@@ -928,10 +960,11 @@ class Handler(BaseHTTPRequestHandler):
                         sysctl.run_detached(self.POWER[act])
             except Exception as e:
                 # Stop at the failing step rather than half-running the rest.
-                log("scene '%s' failed at step %d (%s): %s"
-                    % (scene.get("name"), i + 1, op, e))
+                log("steps '%s' failed at step %d (%s): %s"
+                    % (name, i + 1, op, e))
                 return
-        log("scene '%s' finished" % scene.get("name"))
+        if name:
+            log("steps '%s' finished" % name)
 
     # -- add an app by browsing the PC -----------------------------------
     def _browse(self, p):

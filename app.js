@@ -429,7 +429,7 @@ board.addEventListener('click', async e => {
   setTimeout(() => el.classList.remove('sent'), 500);
 
   try {
-    const body = { kind: t.kind, ref: t.ref };
+    const body = { kind: t.kind, ref: t.ref, id: t.id };
     if (destructive) body.confirm = true;
     if (t.kind === 'toggle' && t.ref === 'keeper' && S) body.target = S.volume;
     const r = await api('/api/tile', body);

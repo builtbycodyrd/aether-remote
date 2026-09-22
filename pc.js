@@ -189,6 +189,13 @@ const ADDABLE = [
   ['action:screen.off',      'Screen off', 1, 1],
 ];
 
+// Which tile (if any) has its pre-launch actions open for editing.
+let actEdit = null;
+// The steps that make sense to run BEFORE launching a game/app - the audio
+// setup and a wait. (Scenes get the full catalogue; this is the useful subset
+// for "launch at a set volume".)
+const PRE_OPS = ['volume', 'mute', 'unmute', 'keeper', 'wait'];
+
 function viewLayout(){
   main.innerHTML = `
     <h2>Layout</h2>
@@ -216,6 +223,10 @@ function viewLayout(){
                 ${SIZES.map(([w,h]) => `<option value="${w}x${h}"
                   ${t.w===w&&t.h===h?'selected':''}>${w} × ${h}</option>`).join('')}
               </select>
+              ${(t.kind==='app'||t.kind==='game')
+                ? `<button class="btn sm" data-acts="${si}.${ti}">Actions${
+                    t.actions&&t.actions.length?' ('+t.actions.length+')':''}</button>`
+                : ''}
               <button class="btn sm danger" data-del="${si}.${ti}">Remove</button>
             </div>`).join('') || '<div class="muted" style="font-size:12px">Empty</div>'}
         </div>
@@ -263,6 +274,17 @@ function viewLayout(){
       toast(name + ' added');
     }));
 
+  main.querySelectorAll('[data-acts]').forEach(b =>
+    b.addEventListener('click', () => {
+      const [si, ti] = b.dataset.acts.split('.').map(Number);
+      // Toggle: clicking Actions on the open tile closes it.
+      actEdit = (actEdit && actEdit.si === si && actEdit.ti === ti)
+        ? null : { si, ti };
+      viewLayout();
+    }));
+
+  if (actEdit) drawActEditor();
+
   $('#addSection').addEventListener('click', async () => {
     const name = prompt('Section name', 'New section');
     if (!name) return;
@@ -271,6 +293,66 @@ function viewLayout(){
   });
 
   wireTileDrag();
+}
+
+/* The pre-launch actions for one game/app tile. Reuses the same stepRow the
+   scene editor draws, but only offers PRE_OPS and saves onto the tile itself
+   rather than a scene. */
+function drawActEditor(){
+  const sec = L.sections[actEdit.si];
+  const t = sec && sec.tiles[actEdit.ti];
+  if (!t){ actEdit = null; return; }
+  t.actions = t.actions || [];
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.borderColor = 'var(--line2)';
+  card.innerHTML = `
+    <h3>Before launching “${esc(t.label || t.kind)}”</h3>
+    <div class="sub" style="margin:0 0 10px">These run in order, then the
+      ${esc(t.kind)} opens — handy for “set volume to 40, then launch”.</div>
+    <div id="asteps">
+      ${t.actions.map((st,i) => stepRow(st,i,[])).join('') ||
+        '<div class="muted" style="font-size:12.5px;padding-bottom:8px">No actions yet — the tile just launches.</div>'}
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <select id="newAct">
+        ${PRE_OPS.map(op => `<option value="${op}">${STEPS[op].label}</option>`).join('')}
+      </select>
+      <button class="btn sm" id="addAct">Add action</button>
+      <div style="flex-grow:1"></div>
+      <button class="btn pri" id="doneAct">Done</button>
+    </div>`;
+  main.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  $('#addAct').addEventListener('click', async () => {
+    const op = $('#newAct').value;
+    const spec = STEPS[op];
+    const st = { op };
+    if (spec.arg === 'number') st.value = spec.def;
+    if (spec.arg === 'bool') st.value = true;
+    t.actions.push(st);
+    await saveLayout(true); viewLayout();
+  });
+
+  $('#doneAct').addEventListener('click', () => { actEdit = null; viewLayout(); });
+
+  card.querySelectorAll('[data-sv]').forEach(el =>
+    el.addEventListener('change', async () => {
+      const st = t.actions[+el.dataset.sv];
+      const arg = (STEPS[st.op] || {}).arg;
+      st.value = arg === 'number' ? Number(el.value)
+               : arg === 'bool'   ? el.value === 'true'
+               : el.value;
+      await saveLayout(true);
+    }));
+
+  card.querySelectorAll('[data-sdel]').forEach(b =>
+    b.addEventListener('click', async () => {
+      t.actions.splice(+b.dataset.sdel, 1);
+      await saveLayout(true); viewLayout();
+    }));
 }
 
 function wireTileDrag(){

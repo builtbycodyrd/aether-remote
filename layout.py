@@ -290,6 +290,10 @@ def sanitize(incoming, known_launches):
                     continue
                 clean["launch"] = launch
                 clean["art"] = bool(t.get("art"))
+                # Optional pre-launch actions: "set volume to 40, then launch".
+                acts = clean_steps(t.get("actions"), known_launches, limit=12)
+                if acts:
+                    clean["actions"] = acts
             if kind == "action" and ref not in ACTIONS:
                 continue
             if kind == "toggle" and ref not in TOGGLES:
@@ -303,25 +307,7 @@ def sanitize(incoming, known_launches):
         })
 
     for sc in (incoming.get("scenes") or [])[:40]:
-        steps = []
-        for st in (sc.get("steps") or [])[:30]:
-            op = str(st.get("op", ""))[:30]
-            if op not in ("volume", "mute", "unmute", "keeper", "device",
-                          "open", "close", "key", "type", "wait",
-                          "screenoff", "power"):
-                continue
-            step = {"op": op}
-            if "value" in st:
-                v = st["value"]
-                step["value"] = v if isinstance(v, (int, float, bool)) \
-                    else str(v)[:200]
-            if op in ("open", "close"):
-                launch = known_launches.get(str(st.get("ref", "")))
-                if not launch:
-                    continue
-                step["ref"] = str(st.get("ref"))[:120]
-                step["launch"] = launch
-            steps.append(step)
+        steps = clean_steps(sc.get("steps"), known_launches)
         if not steps:
             continue
         out["scenes"].append({
@@ -332,3 +318,32 @@ def sanitize(incoming, known_launches):
         })
 
     return out
+
+
+STEP_OPS = {"volume", "mute", "unmute", "keeper", "device", "open", "close",
+            "key", "type", "wait", "screenoff", "power"}
+
+
+def clean_steps(raw, known_launches, limit=30):
+    """Rebuild a list of scene/action steps, keeping only recognised ops and
+    never trusting a launch string from the phone - open/close resolve their
+    command from our own scan, exactly like a tile does. Shared by scenes and
+    by a tile's pre-launch actions."""
+    steps = []
+    for st in (raw or [])[:limit]:
+        op = str(st.get("op", ""))[:30]
+        if op not in STEP_OPS:
+            continue
+        step = {"op": op}
+        if "value" in st:
+            v = st["value"]
+            step["value"] = v if isinstance(v, (int, float, bool)) \
+                else str(v)[:200]
+        if op in ("open", "close"):
+            launch = known_launches.get(str(st.get("ref", "")))
+            if not launch:
+                continue
+            step["ref"] = str(st.get("ref"))[:120]
+            step["launch"] = launch
+        steps.append(step)
+    return steps
