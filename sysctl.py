@@ -6,8 +6,10 @@
 # server is multi-threaded. Serialising also means two phone taps can never
 # interleave a get/set pair.
 
+import base64
 import ctypes
 import ctypes.wintypes as wt
+import json
 import os
 import queue
 import threading
@@ -580,6 +582,137 @@ def set_clipboard_text(text):
         return True
     finally:
         user32.CloseClipboard()
+
+
+# --------------------------------------------------------------- now playing
+# Windows exposes the current media (Spotify, a browser, a game) through the
+# System Media Transport Controls. There is no ctypes route to it - it is a
+# WinRT async API - so we borrow Windows PowerShell's WinRT projection through
+# a tiny script. pwsh (7+) dropped WinRT, so this must be "powershell". Read
+# is cached for a couple of seconds so polling /api/state never spawns a
+# storm of shells.
+
+PS_NOWPLAYING = r"""
+$ErrorActionPreference='Stop'
+try {
+ Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
+ $m = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+   $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+   $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+ function Await($o,$t){ $x=$m.MakeGenericMethod($t).Invoke($null,@($o));
+   $x.Wait(-1)|Out-Null; $x.Result }
+ [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime]|Out-Null
+ $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+ $s = $mgr.GetCurrentSession()
+ if($s){
+  $i=$s.GetPlaybackInfo()
+  $p = Await ($s.GetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+  [pscustomobject]@{title=$p.Title;artist=$p.Artist;album=$p.AlbumTitle;app=$s.SourceAppUserModelId;status=[int]$i.PlaybackStatus} | ConvertTo-Json -Compress
+ } else { '{}' }
+} catch { '{}' }
+"""
+
+_np_lock = threading.Lock()
+_np = {"at": 0.0, "val": None}
+
+
+def _read_now_playing():
+    b64 = base64.b64encode(PS_NOWPLAYING.encode("utf-16-le")).decode()
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", b64],
+            capture_output=True, text=True, timeout=8,
+            creationflags=0x08000000).stdout.strip()
+        d = json.loads(out or "{}")
+    except Exception:
+        return None
+    if not d or not d.get("title"):
+        return None
+    status = d.get("status")           # 4 = Playing, 5 = Paused
+    return {"title": d.get("title") or "", "artist": d.get("artist") or "",
+            "album": d.get("album") or "", "app": d.get("app") or "",
+            "playing": status == 4, "status": status}
+
+
+def now_playing(ttl=3.0):
+    now = time.time()
+    with _np_lock:
+        if now - _np["at"] < ttl:
+            return _np["val"]
+    val = _read_now_playing()
+    with _np_lock:
+        _np["at"] = time.time()
+        _np["val"] = val
+    return val
+
+
+# ------------------------------------------------------- running apps / tasks
+
+WNDENUMPROC = WINFUNCTYPE(c_int, wt.HWND, wt.LPARAM)
+_SKIP_PROC = {"applicationframehost.exe", "textinputhost.exe",
+              "systemsettings.exe", "pythonw.exe", "python.exe",
+              "shellexperiencehost.exe", "searchhost.exe"}
+
+
+def running_windows():
+    """Visible, titled top-level windows - i.e. the apps a person would think
+    of as 'open' - as {pid, process, title}, one row per process."""
+    out, seen = [], set()
+
+    def cb(hwnd, lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return 1
+            n = user32.GetWindowTextLengthW(hwnd)
+            if not n:
+                return 1
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            title = buf.value
+            if not title or title == "Program Manager":
+                return 1
+            pid = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, byref(pid))
+            if pid.value in seen:
+                return 1
+            name = ""
+            h = kernel32.OpenProcess(0x1000, False, pid.value)
+            if h:
+                size = wt.DWORD(260)
+                pbuf = ctypes.create_unicode_buffer(260)
+                if kernel32.QueryFullProcessImageNameW(h, 0, pbuf, byref(size)):
+                    name = pbuf.value.rsplit("\\", 1)[-1]
+                kernel32.CloseHandle(h)
+            if name.lower() in _SKIP_PROC:
+                return 1
+            seen.add(pid.value)
+            out.append({"pid": pid.value, "process": name,
+                        "title": title[:90]})
+        except Exception:
+            pass
+        return 1
+
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
+    out.sort(key=lambda w: (w["process"].lower(), w["title"].lower()))
+    return out[:60]
+
+
+def end_task(pid):
+    """Close an app by pid. Refuses this very process, so the phone can never
+    make the remote end itself."""
+    try:
+        pid = int(pid)
+    except Exception:
+        return {"ok": False, "error": "bad pid"}
+    if pid == os.getpid():
+        return {"ok": False, "error": "cannot end the remote itself"}
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=10,
+                       creationflags=0x08000000)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def lock_workstation():

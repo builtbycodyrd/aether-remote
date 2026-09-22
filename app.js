@@ -163,9 +163,37 @@ function tileInner(t){
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8H20l-4.9 3.6 1.9 5.8L12 14.6 7 18.2l1.9-5.8L4 8.8h6.1z"/></svg>
       <div class="nm" style="flex-grow:1">${esc(t.label)}</div></div>`;
 
+  case 'nowplaying':
+    return nowPlayingInner();
+
   default:
     return `<div class="ico"><div class="lab">${esc(t.label || t.kind)}</div></div>`;
   }
+}
+
+/* The now-playing card. Self-contained inline styles so it needs no extra
+   CSS, and it fills whatever tile size it is given. */
+function nowPlayingInner(){
+  const n = S && S.nowplaying;
+  const wrap = (inner) => `<div style="display:flex;flex-direction:column;
+    justify-content:center;gap:12px;height:100%;padding:12px 15px">${inner}</div>`;
+  if (!n) return wrap(`<div style="color:var(--muted);font-size:13px;
+    text-align:center">Nothing playing</div>`);
+  const b = 'background:none;border:0;color:var(--text);cursor:pointer;' +
+            'padding:6px;line-height:1;font-size:22px';
+  return wrap(`
+    <div style="min-width:0">
+      <div style="font-weight:600;font-size:15px;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap">${esc(n.title)}</div>
+      <div style="color:var(--muted);font-size:12.5px;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap">${esc(n.artist || n.album || '')}</div>
+    </div>
+    <div style="display:flex;gap:16px;align-items:center;justify-content:center">
+      <button data-np="media.prev" aria-label="Previous" style="${b}">&#9198;</button>
+      <button data-np="media.playpause" aria-label="Play or pause"
+        style="${b};font-size:27px">${n.playing ? '&#9208;' : '&#9654;'}</button>
+      <button data-np="media.next" aria-label="Next" style="${b}">&#9197;</button>
+    </div>`);
 }
 
 function iconFor(ref){
@@ -301,6 +329,11 @@ function refresh(){
         }
       }
 
+      else if (t.kind === 'nowplaying'){
+        // No images inside, so a full inner re-render is cheap and flicker-free.
+        el.innerHTML = tileInner(t);
+      }
+
       else if (t.kind === 'game' || t.kind === 'app'){
         const want = isRunning(t);
         const has = !!el.querySelector('.badge');
@@ -401,6 +434,16 @@ board.addEventListener('click', async e => {
 
   const addSec = e.target.closest('[data-addtile]');
   if (addSec){ openAdd(addSec.dataset.addtile); return; }
+
+  // Now-playing transport buttons: act on the button, not the whole tile.
+  const np = e.target.closest('[data-np]');
+  if (np && !editing){
+    e.stopPropagation();
+    api('/api/tile', { kind: 'action', ref: np.dataset.np })
+      .then(() => { setTimeout(poll, 400); })
+      .catch(err => toast(err.message));
+    return;
+  }
 
   const el = e.target.closest('[data-tile]');
   if (!el) return;
@@ -1999,8 +2042,9 @@ $('#title').addEventListener('click', openPCs);
 /* ================= tools (clipboard, files) ================= */
 async function openTools(){
   openSheet('Tools', `
-    <div style="margin-top:12px">
-      <div class="btn wide" id="openFiles">📁 Browse the PC&rsquo;s files</div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <div class="btn wide" id="openFiles" style="flex:1">📁 Files</div>
+      <div class="btn wide" id="openApps" style="flex:1">🗔 Running apps</div>
     </div>
     <div style="margin-top:18px">
       <div class="t" style="margin-bottom:7px">PC clipboard</div>
@@ -2024,6 +2068,7 @@ async function openTools(){
     `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
 
   $('#openFiles').addEventListener('click', () => openFiles(''));
+  $('#openApps').addEventListener('click', openApps);
 
   const msg = (m) => { const e = $('#clipMsg'); if (e) e.textContent = m; };
 
@@ -2061,6 +2106,50 @@ async function openTools(){
   catch(e){}
 }
 $('#toolsBtn').addEventListener('click', openTools);
+
+/* Running apps, with an End button each. "End" is taskkill /T /F, so it also
+   asks for a confirm tap on anything that looks like real work. The server
+   refuses to end the remote itself. */
+async function openApps(){
+  let data;
+  try { data = await api('/api/apps'); }
+  catch(e){ toast(e.message); return; }
+  const apps = data.apps || [];
+  let armedPid = null;
+
+  const paint = () => {
+    const rows = apps.map(a => `
+      <div class="srow">
+        <div style="flex:0 0 auto">🗔</div>
+        <div style="flex-grow:1;min-width:0">
+          <div class="t" style="overflow:hidden;text-overflow:ellipsis;
+            white-space:nowrap">${esc(a.title)}</div>
+          <div class="d">${esc(a.process)}</div>
+        </div>
+        <button class="btn sm ${armedPid === a.pid ? 'danger' : ''}"
+          data-end="${a.pid}">${armedPid === a.pid ? 'Sure?' : 'End'}</button>
+      </div>`).join('');
+    openSheet('Running apps', `
+      <div style="margin-top:12px">${rows ||
+        '<div class="srow"><div class="d">Nothing with a window open.</div></div>'}</div>`,
+      `<button class="btn" id="appsBack">Tools</button>
+       <div style="flex-grow:1"></div>
+       <button class="btn" id="appsRefresh">Refresh</button>`);
+    $('#appsBack').addEventListener('click', openTools);
+    $('#appsRefresh').addEventListener('click', openApps);
+    $('#sheetBody').querySelectorAll('[data-end]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const pid = +b.dataset.end;
+        if (armedPid !== pid){ armedPid = pid; paint(); return; }  // confirm
+        try {
+          await api('/api/endtask', { pid });
+          toast('Ended');
+          setTimeout(openApps, 500);
+        } catch(e){ toast(e.message); }
+      }));
+  };
+  paint();
+}
 
 /* A read-only file browser. Tap a folder to go in, tap a file to download it
    to the phone. There is no upload or write path anywhere - the server only

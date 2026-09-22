@@ -553,6 +553,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"text": txt[:100000],
                                         "truncated": len(txt) > 100000})
 
+            if path == "/api/apps":
+                return self._send(200, {"apps": sysctl.running_windows()})
+
             return self._send(404, {"error": "no such path"})
         except Exception as e:
             log("GET %s failed: %s\n%s" % (path, e, traceback.format_exc()))
@@ -620,6 +623,11 @@ class Handler(BaseHTTPRequestHandler):
                 okset = sysctl.set_clipboard_text(text)
                 return self._send(200 if okset else 500,
                                   {"ok": okset, "chars": len(text)})
+
+            if path == "/api/endtask":
+                r = sysctl.end_task(b.get("pid"))
+                log("end task pid=%s -> %s" % (b.get("pid"), r.get("ok")))
+                return self._send(200 if r.get("ok") else 400, r)
 
             # ---- desktop input ----
             if path == "/api/click":
@@ -1387,6 +1395,7 @@ class Handler(BaseHTTPRequestHandler):
         st["keeper"] = sysctl.keeper.info()
         st["memory"] = sysctl.memory_info()
         st["stats"] = sysctl.system_stats()
+        st["nowplaying"] = sysctl.now_playing()
         st["foreground"] = sysctl.foreground_app()
         st["devices"] = sysctl.devices()["devices"]
         st["launchers"] = [{"id": l["id"], "label": l["label"],

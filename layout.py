@@ -229,7 +229,7 @@ def save(d):
 # malicious payload cannot smuggle anything into the file we execute from.
 
 VALID_KINDS = {"slider", "toggle", "action", "app", "game",
-               "stream", "stat", "scene", "spacer"}
+               "stream", "stat", "scene", "spacer", "nowplaying"}
 
 
 def sanitize(incoming, known_launches):

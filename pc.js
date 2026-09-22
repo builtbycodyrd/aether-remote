@@ -180,6 +180,7 @@ const ADDABLE = [
   ['stat:disk',       'Disk',           2, 1],
   ['stat:temp',       'Temperature',    2, 1],
   ['stat:battery',    'Battery',        2, 1],
+  ['nowplaying:',     'Now playing',    4, 2],
   ['stream:0',        'Desktop preview',4, 2],
   ['slider:volume',   'Volume',         4, 1],
   ['toggle:mute',     'Mute',           1, 1],
