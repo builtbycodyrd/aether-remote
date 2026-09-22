@@ -517,6 +517,71 @@ def system_stats():
     return out
 
 
+# ---------------------------------------------------------------- clipboard
+# Text only, both directions. Pointer-sized handles need explicit restypes or
+# ctypes truncates them to 32 bits on x64 and the calls quietly fail.
+
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE = 0x0002
+
+kernel32.GlobalAlloc.restype = c_void_p
+kernel32.GlobalAlloc.argtypes = [c_ulong, ctypes.c_size_t]
+kernel32.GlobalLock.restype = c_void_p
+kernel32.GlobalLock.argtypes = [c_void_p]
+kernel32.GlobalUnlock.argtypes = [c_void_p]
+user32.GetClipboardData.restype = c_void_p
+user32.GetClipboardData.argtypes = [c_ulong]
+user32.SetClipboardData.restype = c_void_p
+user32.SetClipboardData.argtypes = [c_ulong, c_void_p]
+
+
+def _open_clipboard(tries=5):
+    for _ in range(tries):
+        if user32.OpenClipboard(0):
+            return True
+        time.sleep(0.03)     # another app may hold it for an instant
+    return False
+
+
+def get_clipboard_text():
+    if not _open_clipboard():
+        return ""
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return ""
+        p = kernel32.GlobalLock(h)
+        if not p:
+            return ""
+        try:
+            return ctypes.c_wchar_p(p).value or ""
+        finally:
+            kernel32.GlobalUnlock(h)
+    finally:
+        user32.CloseClipboard()
+
+
+def set_clipboard_text(text):
+    text = str(text)
+    if not _open_clipboard():
+        return False
+    try:
+        user32.EmptyClipboard()
+        buf = ctypes.create_unicode_buffer(text)     # includes the NUL
+        size = ctypes.sizeof(buf)
+        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
+        if not h:
+            return False
+        p = kernel32.GlobalLock(h)
+        ctypes.memmove(p, buf, size)
+        kernel32.GlobalUnlock(h)
+        # SetClipboardData takes ownership of h - do not free it.
+        user32.SetClipboardData(CF_UNICODETEXT, h)
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
 def lock_workstation():
     user32.LockWorkStation()
     return {"ok": True}

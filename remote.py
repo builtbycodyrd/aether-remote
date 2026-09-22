@@ -541,6 +541,12 @@ class Handler(BaseHTTPRequestHandler):
                 # about it more than once a day.
                 return self._send(200, update.state())
 
+            if path == "/api/clipboard":
+                # Text only. Capped, and deliberately never logged.
+                txt = sysctl.get_clipboard_text() or ""
+                return self._send(200, {"text": txt[:100000],
+                                        "truncated": len(txt) > 100000})
+
             return self._send(404, {"error": "no such path"})
         except Exception as e:
             log("GET %s failed: %s\n%s" % (path, e, traceback.format_exc()))
@@ -600,6 +606,14 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/update/install":
                 return self._update_install()
+
+            if path == "/api/clipboard":
+                # Text only, capped, not logged. Whatever the phone sends
+                # replaces the PC clipboard.
+                text = str(b.get("text", ""))[:100000]
+                okset = sysctl.set_clipboard_text(text)
+                return self._send(200 if okset else 500,
+                                  {"ok": okset, "chars": len(text)})
 
             # ---- desktop input ----
             if path == "/api/click":

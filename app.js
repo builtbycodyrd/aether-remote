@@ -1996,6 +1996,67 @@ function pcsMarkTitle(){
 // Always opens: with one PC saved it is still where you add the second.
 $('#title').addEventListener('click', openPCs);
 
+/* ================= tools (clipboard, files) ================= */
+async function openTools(){
+  openSheet('Tools', `
+    <div style="margin-top:12px">
+      <div class="t" style="margin-bottom:7px">PC clipboard</div>
+      <textarea class="field" id="clipFrom" readonly rows="3"
+        placeholder="Whatever is copied on the PC shows here"
+        style="width:100%;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="clipGet">Get from PC</button>
+        <button class="btn" id="clipCopy">Copy on phone</button>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <div class="t" style="margin-bottom:7px">Send to the PC</div>
+      <textarea class="field" id="clipTo" rows="3"
+        placeholder="Type or paste here, then Send — it lands on the PC clipboard"
+        style="width:100%;resize:vertical"></textarea>
+      <div class="btn wide pri" id="clipSend" style="margin-top:9px">Send to PC clipboard</div>
+    </div>
+    <div id="clipMsg" style="font-size:12px;color:var(--muted);margin-top:10px;
+      line-height:1.5"></div>`,
+    `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
+
+  const msg = (m) => { const e = $('#clipMsg'); if (e) e.textContent = m; };
+
+  $('#clipGet').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/clipboard');
+      $('#clipFrom').value = r.text || '';
+      msg(r.text ? (r.truncated ? 'Showing the first 100,000 characters'
+                                : 'Got the PC clipboard')
+                 : 'The PC clipboard is empty.');
+    } catch(e){ msg(e.message); }
+  });
+
+  $('#clipCopy').addEventListener('click', async () => {
+    const box = $('#clipFrom');
+    if (!box.value){ msg('Nothing to copy — tap Get from PC first.'); return; }
+    // navigator.clipboard needs a secure context, which plain http on a
+    // tailnet is not, so fall back to selecting the text for a long-press.
+    try { await navigator.clipboard.writeText(box.value); msg('Copied to your phone.'); }
+    catch(e){ box.focus(); box.select(); msg('Long-press the highlighted text and choose Copy.'); }
+  });
+
+  $('#clipSend').addEventListener('click', async () => {
+    const text = $('#clipTo').value;
+    if (!text){ msg('Type something to send first.'); return; }
+    try {
+      const r = await api('/api/clipboard', { text });
+      msg('Sent ' + r.chars + ' character' + (r.chars === 1 ? '' : 's')
+          + ' to the PC clipboard.');
+    } catch(e){ msg(e.message); }
+  });
+
+  // Show what's on the PC right now, without making them tap Get first.
+  try { const r = await api('/api/clipboard'); $('#clipFrom').value = r.text || ''; }
+  catch(e){}
+}
+$('#toolsBtn').addEventListener('click', openTools);
+
 /* ================= boot ================= */
 async function loadLayout(){
   L = await api('/api/layout');
