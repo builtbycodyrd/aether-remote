@@ -168,7 +168,10 @@ def build_default(library_items):
     ]
 
     system = [
+        tile("stat", 2, 1, ref="cpu", label="CPU"),
+        tile("stat", 2, 1, ref="gpu", label="GPU"),
         tile("stat", 2, 1, ref="ram", label="RAM"),
+        tile("stat", 2, 1, ref="disk", label="Disk"),
         tile("action", 2, 1, ref="power.lock", label="Lock PC"),
     ]
 

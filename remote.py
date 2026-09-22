@@ -1258,6 +1258,7 @@ class Handler(BaseHTTPRequestHandler):
         st = sysctl.status()
         st["keeper"] = sysctl.keeper.info()
         st["memory"] = sysctl.memory_info()
+        st["stats"] = sysctl.system_stats()
         st["foreground"] = sysctl.foreground_app()
         st["devices"] = sysctl.devices()["devices"]
         st["launchers"] = [{"id": l["id"], "label": l["label"],

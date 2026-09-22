@@ -168,6 +168,27 @@ async function pickApp(){
 /* ======================= LAYOUT ======================= */
 const SIZES = [[1,1],[2,1],[4,1],[2,2],[2,3],[4,2],[4,3]];
 
+/* Tiles you can add that DON'T come from the library. Games and apps are
+   added by dragging artwork in the Library tab (they carry a launch command
+   the server has to have scanned); these are the built-in ones - live stats,
+   the desktop preview, volume, and the safe actions. Each is "kind:ref" with
+   a default label and size. */
+const ADDABLE = [
+  ['stat:cpu',        'CPU',            2, 1],
+  ['stat:gpu',        'GPU',            2, 1],
+  ['stat:ram',        'RAM',            2, 1],
+  ['stat:disk',       'Disk',           2, 1],
+  ['stat:temp',       'Temperature',    2, 1],
+  ['stat:battery',    'Battery',        2, 1],
+  ['stream:0',        'Desktop preview',4, 2],
+  ['slider:volume',   'Volume',         4, 1],
+  ['toggle:mute',     'Mute',           1, 1],
+  ['toggle:keeper',   'Lock volume',    2, 1],
+  ['action:power.lock',      'Lock PC',    2, 1],
+  ['action:media.playpause', 'Play/Pause', 1, 1],
+  ['action:screen.off',      'Screen off', 1, 1],
+];
+
 function viewLayout(){
   main.innerHTML = `
     <h2>Layout</h2>
@@ -198,6 +219,13 @@ function viewLayout(){
               <button class="btn sm danger" data-del="${si}.${ti}">Remove</button>
             </div>`).join('') || '<div class="muted" style="font-size:12px">Empty</div>'}
         </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <select data-addsel="${si}" style="flex-grow:1">
+            ${ADDABLE.map(([kr, name]) =>
+              `<option value="${kr}">${esc(name)}</option>`).join('')}
+          </select>
+          <button class="btn sm" data-add="${si}">Add tile</button>
+        </div>
       </div>`).join('')}
     <button class="btn" id="addSection">Add a section</button>`;
 
@@ -220,6 +248,19 @@ function viewLayout(){
       const [si, ti] = b.dataset.del.split('.').map(Number);
       L.sections[si].tiles.splice(ti, 1);
       await saveLayout(true); viewLayout();
+    }));
+
+  main.querySelectorAll('[data-add]').forEach(b =>
+    b.addEventListener('click', async () => {
+      const si = +b.dataset.add;
+      const sel = main.querySelector(`[data-addsel="${si}"]`);
+      const spec = ADDABLE.find(a => a[0] === sel.value);
+      if (!spec) return;
+      const [kr, name, w, h] = spec;
+      const [kind, ref] = kr.split(':');
+      L.sections[si].tiles.push({ kind, ref, label: name, w, h });
+      await saveLayout(true); viewLayout();
+      toast(name + ' added');
     }));
 
   $('#addSection').addEventListener('click', async () => {

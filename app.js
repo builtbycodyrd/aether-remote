@@ -144,11 +144,16 @@ function tileInner(t){
     </div>`;
 
   case 'stat': {
-    const m = (S && S.memory) || {usedGb:0, totalGb:0, percent:0};
+    // A stat tile names which stat it shows in t.ref (cpu/ram/disk/gpu/temp/
+    // battery). The server hands them all over live in S.stats; the tile is
+    // just whichever one this is.
+    const s = (S && S.stats && S.stats[t.ref]) ||
+              {label: t.label || t.ref || 'Stat', big: '—', unit: '', pct: 0};
+    const bars = [38, 52, 44, 68, s.pct || 0];
     return `<div class="stat">
-      <div><div class="k">RAM</div>
-        <div class="v">${m.usedGb}<span style="font-size:10px;color:var(--muted);font-weight:400"> / ${m.totalGb} GB</span></div></div>
-      <div class="bars">${[38,52,44,68,m.percent].map(
+      <div><div class="k">${esc(s.label || t.label || 'Stat')}</div>
+        <div class="v">${esc(String(s.big))}<span style="font-size:10px;color:var(--muted);font-weight:400"> ${esc(s.unit || '')}</span></div></div>
+      <div class="bars">${bars.map(
         (h,i) => `<i style="height:${Math.max(8,h)}%;${i===4?'background:var(--accent2)':''}"></i>`).join('')}</div>
     </div>`;
   }
@@ -285,11 +290,15 @@ function refresh(){
       }
 
       else if (t.kind === 'stat'){
-        const m = S.memory || {};
-        const v = el.querySelector('.v');
-        if (v) v.innerHTML = `${m.usedGb}<span style="font-size:10px;color:var(--muted);font-weight:400"> / ${m.totalGb} GB</span>`;
-        const last = el.querySelector('.bars i:last-child');
-        if (last) last.style.height = Math.max(8, m.percent || 0) + '%';
+        const s = (S.stats && S.stats[t.ref]) || null;
+        if (s){
+          const k = el.querySelector('.k');
+          if (k && k.textContent !== s.label) k.textContent = s.label;
+          const v = el.querySelector('.v');
+          if (v) v.innerHTML = `${esc(String(s.big))}<span style="font-size:10px;color:var(--muted);font-weight:400"> ${esc(s.unit || '')}</span>`;
+          const last = el.querySelector('.bars i:last-child');
+          if (last) last.style.height = Math.max(8, s.pct || 0) + '%';
+        }
       }
 
       else if (t.kind === 'game' || t.kind === 'app'){

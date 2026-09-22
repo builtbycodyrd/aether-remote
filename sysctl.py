@@ -8,6 +8,7 @@
 
 import ctypes
 import ctypes.wintypes as wt
+import os
 import queue
 import threading
 import subprocess
@@ -360,6 +361,160 @@ def memory_info():
     return {"percent": m.dwMemoryLoad,
             "usedGb": round((m.ullTotalPhys - m.ullAvailPhys) / gb, 1),
             "totalGb": round(m.ullTotalPhys / gb, 1)}
+
+
+# ------------------------------------------------------- live component stats
+# Everything a stat tile can show: CPU, RAM, disk, GPU, temp, battery. Read
+# with plain syscalls except the GPU, which needs nvidia-smi - so CPU and GPU
+# are sampled on a background thread and read from a cache, keeping /api/state
+# instant no matter how often the phone polls it.
+
+class _FILETIME(Structure):
+    _fields_ = [("lo", wt.DWORD), ("hi", wt.DWORD)]
+
+
+def _ft(ft):
+    return (ft.hi << 32) | ft.lo
+
+
+def _cpu_times():
+    idle, kern, usr = _FILETIME(), _FILETIME(), _FILETIME()
+    kernel32.GetSystemTimes(byref(idle), byref(kern), byref(usr))
+    # kernel time already includes idle, so total busy = (kernel+user)-idle.
+    return _ft(idle), _ft(kern) + _ft(usr)
+
+
+def _read_gpu():
+    """utilization / memory / temp / name for an NVIDIA card, or None.
+
+    nvidia-smi is the only dependency-free way to get this, and it is the card
+    Cody actually has. No NVIDIA -> None, and the GPU/temp tiles show a dash.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,"
+             "memory.total,temperature.gpu,name",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=4,
+            creationflags=0x08000000).stdout.strip()
+        if not out:
+            return None
+        p = [x.strip() for x in out.splitlines()[0].split(",")]
+        mu, mt = float(p[1]), float(p[2])
+        # "NVIDIA GeForce RTX 3060" -> "RTX 3060" so it fits a small tile.
+        name = p[4].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "")
+        return {"pct": int(float(p[0])),
+                "memPct": round(mu / mt * 100) if mt else 0,
+                "tempC": int(float(p[3])), "name": name}
+    except Exception:
+        return None
+
+
+_stat_lock = threading.Lock()
+_stat_cache = {"cpu": None, "gpu": None}
+_stat_thread = None
+
+
+def _stat_loop():
+    prev = _cpu_times()
+    i = 0
+    while True:
+        time.sleep(1.5)
+        try:
+            idle, total = _cpu_times()
+            dt = total - prev[1]
+            cpu = 0 if dt <= 0 else max(0, min(100,
+                  round((1 - (idle - prev[0]) / dt) * 100)))
+            prev = (idle, total)
+        except Exception:
+            cpu = None
+        # GPU only every other tick - nvidia-smi is a process spawn.
+        gpu = _read_gpu() if (i % 2 == 0) else _stat_cache.get("gpu")
+        i += 1
+        with _stat_lock:
+            _stat_cache["cpu"] = cpu
+            _stat_cache["gpu"] = gpu
+
+
+def _ensure_sampler():
+    global _stat_thread
+    if _stat_thread is None or not _stat_thread.is_alive():
+        _stat_thread = threading.Thread(target=_stat_loop, daemon=True,
+                                        name="stats")
+        _stat_thread.start()
+
+
+def disk_info(drive=None):
+    if drive is None:
+        drive = (os.environ.get("SystemDrive", "C:") + "\\")
+    free = ctypes.c_ulonglong()
+    total = ctypes.c_ulonglong()
+    tfree = ctypes.c_ulonglong()
+    kernel32.GetDiskFreeSpaceExW(c_wchar_p(drive), byref(free),
+                                 byref(total), byref(tfree))
+    gb = 1024.0 ** 3
+    t = total.value / gb
+    f = tfree.value / gb
+    return {"drive": drive.rstrip("\\"), "freeGb": round(f),
+            "totalGb": round(t), "pct": round((t - f) / t * 100) if t else 0}
+
+
+class SYSTEM_POWER_STATUS(Structure):
+    _fields_ = [("ACLineStatus", c_ubyte), ("BatteryFlag", c_ubyte),
+                ("BatteryLifePercent", c_ubyte), ("SystemStatusFlag", c_ubyte),
+                ("BatteryLifeTime", wt.DWORD), ("BatteryFullLifeTime", wt.DWORD)]
+
+
+def battery_info():
+    """None on a desktop (no battery), else percent + charging."""
+    s = SYSTEM_POWER_STATUS()
+    if not kernel32.GetSystemPowerStatus(byref(s)):
+        return None
+    if s.BatteryFlag == 128 or s.BatteryLifePercent == 255:
+        return None
+    return {"pct": int(s.BatteryLifePercent),
+            "charging": s.ACLineStatus == 1}
+
+
+def _na(label):
+    return {"label": label, "big": "—", "unit": "", "pct": 0, "na": True}
+
+
+def system_stats():
+    """One dict keyed by what a stat tile can name (cpu/ram/disk/gpu/temp/
+    battery). Each entry is {label, big, unit, pct} so the phone renders any
+    of them the same way - a number, a small unit, and a bar driven by pct."""
+    _ensure_sampler()
+    with _stat_lock:
+        cpu = _stat_cache.get("cpu")
+        gpu = _stat_cache.get("gpu")
+    mem = memory_info()
+    disk = disk_info()
+    bat = battery_info()
+
+    out = {
+        "cpu": {"label": "CPU", "big": "—" if cpu is None else str(cpu),
+                "unit": "%", "pct": cpu or 0},
+        "ram": {"label": "RAM", "big": str(mem["usedGb"]),
+                "unit": "/ %s GB" % mem["totalGb"], "pct": mem["percent"]},
+        "disk": {"label": "Disk " + disk["drive"], "big": str(disk["freeGb"]),
+                 "unit": "GB free", "pct": disk["pct"]},
+    }
+    if gpu:
+        out["gpu"] = {"label": gpu["name"] or "GPU", "big": str(gpu["pct"]),
+                      "unit": "%", "pct": gpu["pct"]}
+        out["temp"] = {"label": "GPU temp", "big": str(gpu["tempC"]),
+                       "unit": "°C", "pct": min(100, gpu["tempC"])}
+    else:
+        out["gpu"] = _na("GPU")
+        out["temp"] = _na("Temp")
+    if bat:
+        out["battery"] = {"label": "Battery", "big": str(bat["pct"]),
+                          "unit": "% ⚡" if bat["charging"] else "%",
+                          "pct": bat["pct"], "charging": bat["charging"]}
+    else:
+        out["battery"] = dict(_na("Battery"), unit="no battery")
+    return out
 
 
 def lock_workstation():
