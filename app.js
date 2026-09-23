@@ -210,6 +210,15 @@ function iconFor(ref){
     'power.restart': `<svg ${s}><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>`,
     'power.shutdown': `<svg ${s}><path d="M12 3v9"/><path d="M6.4 6.4a9 9 0 1 0 11.2 0"/></svg>`,
     'power.signout': `<svg ${s}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>`,
+    'volume': `<svg ${s}><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`,
+    'stream': `<svg ${s}><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
+    'nowplaying': `<svg ${s}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    'cpu': `<svg ${s}><rect x="8" y="8" width="8" height="8" rx="1"/><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>`,
+    'gpu': `<svg ${s}><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="9" cy="12" r="2.5"/><circle cx="16" cy="12" r="1.5"/></svg>`,
+    'ram': `<svg ${s}><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M6 17v2M10 17v2M14 17v2M18 17v2"/></svg>`,
+    'disk': `<svg ${s}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>`,
+    'temp': `<svg ${s}><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0z"/></svg>`,
+    'battery': `<svg ${s}><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/></svg>`,
   };
   return `<span style="color:var(--text);display:flex">${map[ref] || `<svg ${s}><circle cx="12" cy="12" r="9"/></svg>`}</span>`;
 }
@@ -537,12 +546,16 @@ board.addEventListener('pointerdown', e => {
     return;
   }
 
-  dragging = { mode: 'move', el, found, moved: false };
-  el.setPointerCapture(e.pointerId);
+  dragging = { mode: 'move', id: found.t.id, moved: false };
+  // Capture on the tile keeps the gesture alive even as the board re-renders.
+  try { el.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
 });
 
-board.addEventListener('pointermove', e => {
+// On window, not the board: the gesture must keep receiving moves even when a
+// re-render swaps out the tile the pointer was captured on, and even when the
+// finger strays past the board's edge.
+window.addEventListener('pointermove', e => {
   if (!dragging) return;
 
   if (dragging.mode === 'resize'){
@@ -558,34 +571,59 @@ board.addEventListener('pointermove', e => {
     return;
   }
 
+  // ---- move: a ghost floats under the finger, the others reflow ----
+  const cur = board.querySelector(`[data-tile="${dragging.id}"]`);
   if (!dragging.moved){
+    if (!cur) return;
+    const r = cur.getBoundingClientRect();
     dragging.moved = true;
-    dragging.el.classList.add('lift');
+    dragging.dx = e.clientX - r.left;
+    dragging.dy = e.clientY - r.top;
+    const g = cur.cloneNode(true);
+    g.classList.add('ghost');
+    g.style.position = 'fixed';
+    g.style.left = '0'; g.style.top = '0';
+    g.style.width = r.width + 'px';
+    g.style.height = r.height + 'px';
+    g.style.margin = '0';
+    g.style.gridColumn = ''; g.style.gridRow = '';
+    document.body.appendChild(g);
+    dragging.ghost = g;
+    document.body.classList.add('dragging');
+    cur.classList.add('placeholder');
+    if (navigator.vibrate) navigator.vibrate(8);
   }
-  // Follow the finger, then drop into whatever tile is underneath.
+
+  dragging.ghost.style.transform =
+    `translate(${e.clientX - dragging.dx}px, ${e.clientY - dragging.dy}px) scale(1.05)`;
+
+  // The ghost ignores pointer events, so this finds the tile underneath it.
   const over = document.elementFromPoint(e.clientX, e.clientY);
   const target = over && over.closest('[data-tile]');
-  if (!target || target === dragging.el) return;
+  const tid = target && target.dataset.tile;
+  if (!tid || tid === dragging.id) return;
 
-  const from = findTile(dragging.el.dataset.tile);
-  const to = findTile(target.dataset.tile);
+  const from = findTile(dragging.id);
+  const to = findTile(tid);
   if (!from || !to) return;
 
   from.sec.tiles.splice(from.i, 1);
-  const dest = findTile(target.dataset.tile);
+  const dest = findTile(tid);                 // re-find: indices shifted
   if (!dest){ from.sec.tiles.splice(from.i, 0, from.t); return; }
   dest.sec.tiles.splice(dest.i, 0, from.t);
   dirty = true;
   render();
-  const again = board.querySelector(`[data-tile="${from.t.id}"]`);
-  if (again){ again.classList.add('lift'); dragging.el = again; }
+  const again = board.querySelector(`[data-tile="${dragging.id}"]`);
+  if (again) again.classList.add('placeholder');
 });
 
-['pointerup','pointercancel'].forEach(ev => board.addEventListener(ev, () => {
+['pointerup', 'pointercancel'].forEach(ev => window.addEventListener(ev, () => {
   if (!dragging) return;
-  dragging.el.classList.remove('lift');
-  dragging.el.style.gridColumn = '';
-  dragging.el.style.gridRow = '';
+  if (dragging.ghost) dragging.ghost.remove();
+  document.body.classList.remove('dragging');
+  if (dragging.el){ dragging.el.style.gridColumn = ''; dragging.el.style.gridRow = ''; }
+  const cur = dragging.id && board.querySelector(`[data-tile="${dragging.id}"]`);
+  if (cur) cur.classList.remove('placeholder');
   dragging = null;
   render();
 }));
@@ -717,7 +755,13 @@ const CONTROLS = [
   { kind:'action', ref:'media.prev', label:'Previous', w:1, h:1 },
   { kind:'action', ref:'screen.off', label:'Screen off', w:1, h:1 },
   { kind:'stream', ref:'0', label:'Desktop', w:4, h:2 },
+  { kind:'nowplaying', ref:'', label:'Now playing', w:4, h:2 },
+  { kind:'stat',   ref:'cpu', label:'CPU', w:2, h:1 },
+  { kind:'stat',   ref:'gpu', label:'GPU', w:2, h:1 },
   { kind:'stat',   ref:'ram', label:'RAM', w:2, h:1 },
+  { kind:'stat',   ref:'disk', label:'Disk', w:2, h:1 },
+  { kind:'stat',   ref:'temp', label:'Temp', w:2, h:1 },
+  { kind:'stat',   ref:'battery', label:'Battery', w:2, h:1 },
   { kind:'action', ref:'power.lock', label:'Lock PC', w:2, h:1 },
   { kind:'action', ref:'power.sleep', label:'Sleep', w:2, h:1 },
   { kind:'action', ref:'power.restart', label:'Restart', w:2, h:1 },
