@@ -171,7 +171,13 @@ yes_ "$(ask "Go ahead? (y/n)" "y")" || die "cancelled - nothing was changed"
 # -------------------------------------------------------------- template
 say "Finding a Debian template"
 pveam update >/dev/null 2>&1 || warn "template list refresh failed; using what's cached"
-pick_tpl() { pveam available --section system | awk '{print $2}' | { grep -E "^$1" || true; } | sort -V | tail -n 1; }
+# Proxmox lists the same template for several CPU types (amd64 AND arm64) -
+# pick the one built for THIS host, never whichever happens to sort last.
+ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+pick_tpl() {
+  pveam available --section system | awk '{print $2}' \
+    | { grep -E "^$1_[^_]+_${ARCH}\.tar" || true; } | sort -V | tail -n 1
+}
 TPL="$(pick_tpl debian-13-standard)"
 [ -n "$TPL" ] || TPL="$(pick_tpl debian-12-standard)"
 [ -n "$TPL" ] || die "no Debian template available"
@@ -179,7 +185,8 @@ TSTORE="$(pvesm status -content vztmpl | awk 'NR>1 && $3=="active" {print $1; ex
 [ -n "$TSTORE" ] || die "no storage can hold templates"
 if ! pveam list "$TSTORE" | grep -q "$TPL"; then
   say "Downloading $TPL"
-  pveam download "$TSTORE" "$TPL" >/dev/null
+  pveam download "$TSTORE" "$TPL" >/dev/null \
+    || die "couldn't download $TPL - nothing else was changed; try again in a minute"
 fi
 
 # ------------------------------------------------------------- container
