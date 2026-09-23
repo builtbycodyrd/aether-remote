@@ -112,6 +112,15 @@
 </div>
 
 <script>
+// Moving from the old http address to https: the PC list comes along in the
+// URL fragment (never sent to the server). Keep it until the app imports it,
+// because signing in navigates away and would drop the fragment.
+try {
+  if (location.hash.indexOf('#import=') === 0) {
+    localStorage.setItem('aether.pcs.import', location.hash.slice(1));
+    history.replaceState(null, '', location.pathname);
+  }
+} catch (e) {}
 const code = document.getElementById('code');
 const err  = document.getElementById('err');
 const go   = document.getElementById('go');

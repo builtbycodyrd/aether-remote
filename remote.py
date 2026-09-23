@@ -41,6 +41,8 @@ import library  # noqa: E402
 import layout   # noqa: E402
 import update   # noqa: E402
 import wol      # noqa: E402
+import tls      # noqa: E402
+import ssl      # noqa: E402
 
 
 # The scan takes ~1.3s, so cache it and refresh on demand rather than on
@@ -302,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "no such path"})
 
     def _phone_url(self):
+        if getattr(self.server, "https_base", None):
+            return self.server.https_base + "/"
         ip = tailscale_ip()
         if ip:
             return "http://%s:%d/" % (ip, CFG.get("port", 8787))
@@ -323,10 +327,16 @@ class Handler(BaseHTTPRequestHandler):
         img.save(buf, "PNG")
         return self._send(200, buf.getvalue(), "image/png")
 
+    def _secure(self):
+        """Did this request arrive over HTTPS?"""
+        return isinstance(self.connection, ssl.SSLSocket)
+
     def _session_cookie(self):
         value, max_age = auth.new_session()
-        return ("rs=%s; Path=/; Max-Age=%d; SameSite=Lax; HttpOnly"
-                % (value, max_age))
+        # Over HTTPS the cookie is marked Secure, so a browser never sends it
+        # over a plain connection.
+        return ("rs=%s; Path=/; Max-Age=%d; SameSite=Lax; HttpOnly%s"
+                % (value, max_age, "; Secure" if self._secure() else ""))
 
     def _send(self, code, body, ctype="application/json; charset=utf-8",
               extra=None):
@@ -475,7 +485,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/pairinfo":
                 ip = tailscale_ip()
-                if ip:
+                if getattr(self.server, "https_base", None):
+                    # The secure address - the only one Face ID works on.
+                    url, ts = self.server.https_base + "/", True
+                elif ip:
                     url, ts = "http://%s:%d/" % (ip, CFG.get("port", 8787)), True
                 else:
                     good = [i for i in lan_ips()
@@ -1533,8 +1546,35 @@ def main():
 
     host = resolve_host(a.host)
 
-    srv = ThreadingHTTPServer((host, a.port), Handler)
+    # HTTPS when this PC is on a tailnet with HTTPS certificates turned on -
+    # needed for Face ID / passkeys, and it encrypts on top of Tailscale.
+    # Anyone without that keeps plain HTTP exactly as before.
+    https_base, ctx, domain, had = None, None, None, False
+    if CFG.get("https", "auto") != "off" and _is_tailscale_ip(host):
+        domain = tls.cert_domain(TAILSCALE_EXE)
+        if domain:
+            had = tls.have_cert()
+            # First time: fetch before serving. After that, start at once on
+            # the cached certificate and refresh it in the background.
+            if had or tls.fetch(TAILSCALE_EXE, domain, log):
+                try:
+                    ctx = tls.context()
+                    https_base = "https://%s:%d" % (domain, a.port)
+                except Exception as e:
+                    log("https unavailable, serving http: %s" % e)
+        else:
+            log("tailnet has no HTTPS certificates - serving http")
+
+    srv = tls.dual_server(ThreadingHTTPServer)((host, a.port), Handler)
     srv.daemon_threads = True
+    if ctx:
+        srv.ssl_ctx = ctx
+        srv.https_base = https_base
+        srv.plain_handler = tls.redirect_handler(BaseHTTPRequestHandler)
+        # Started on a cached certificate? Refresh it shortly. Just fetched
+        # one? The next check is the normal interval away.
+        tls.start_renewal(srv, TAILSCALE_EXE, domain, log,
+                          first_delay=30 if had else tls.RENEW_EVERY)
 
     # Write our own pid file so it is correct no matter how we were
     # launched (remote.ps1, the Startup shortcut, or by hand).
@@ -1547,11 +1587,15 @@ def main():
     # Publish where we actually bound, so the tray app (and anything else)
     # does not have to guess - "localhost" is wrong when we are bound to the
     # tailnet address only.
+    reachable = host if host != "0.0.0.0" else (lan_ips() or ["127.0.0.1"])[0]
+    url = (https_base + "/") if https_base else "http://%s:%d/" % (reachable, a.port)
     try:
-        reachable = host if host != "0.0.0.0" else (lan_ips() or ["127.0.0.1"])[0]
         with open(paths.data("bound.json"), "w", encoding="utf-8") as f:
-            json.dump({"host": host, "port": a.port,
-                       "url": "http://%s:%d/" % (reachable, a.port),
+            json.dump({"host": host, "port": a.port, "url": url,
+                       "https": bool(https_base),
+                       # plain http still answers /ping on the same port, so
+                       # local health checks never depend on .ts.net DNS
+                       "ping": "http://%s:%d/ping" % (reachable, a.port),
                        "tailscale": _is_tailscale_ip(host),
                        "at": time.time()}, f)
     except Exception:
@@ -1559,7 +1603,7 @@ def main():
 
     log("listening on %s:%d%s" % (host, a.port,
                                   "  (tailscale only)" if _is_tailscale_ip(host) else ""))
-    log("  http://%s:%d/  (TOTP login)" % (host, a.port))
+    log("  %s  (TOTP login%s)" % (url, ", https" if https_base else ""))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

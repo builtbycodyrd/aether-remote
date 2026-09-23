@@ -130,7 +130,12 @@ def local_url():
 
 
 def phone_url():
-    """The address a phone should use - tailnet if there is one, else LAN."""
+    """The address a phone should use - the secure tailnet name when the
+    server is on HTTPS (the only address Face ID works on), else the tailnet
+    IP, else the LAN."""
+    b = bound()
+    if b.get("https") and b.get("url"):
+        return b["url"]
     try:
         import remote
         ip = remote.tailscale_ip()
@@ -354,7 +359,9 @@ def setup_done():
 def rescan():
     try:
         import urllib.request
-        urllib.request.urlopen(local_url() + "ping", timeout=3).read()
+        # plain-http /ping still answers on the same port under HTTPS
+        urllib.request.urlopen(bound().get("ping") or (local_url() + "ping"),
+                               timeout=3).read()
     except Exception:
         pass
     try:

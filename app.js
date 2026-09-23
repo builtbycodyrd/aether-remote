@@ -1870,6 +1870,44 @@ function fsEnterKey(){
  */
 const PCS_KEY = 'aether.pcs';
 
+/* Moving from the old http address to https loses browser storage (it
+   belongs to one exact address). The server's hand-off page carries the PC
+   list across in the URL fragment - here, or stashed by the login page - as
+   "import=<list>&from=<old origin>". Merge it in, and point the entry that
+   was THIS PC at its new address, so renames, MACs and Pi addresses survive. */
+function pcsImport(){
+  let raw = null;
+  try {
+    if (location.hash.indexOf('#import=') === 0) {
+      raw = location.hash.slice(1);
+      history.replaceState(null, '', location.pathname + location.search);
+    } else {
+      raw = localStorage.getItem('aether.pcs.import');
+    }
+    localStorage.removeItem('aether.pcs.import');
+  } catch (e) { return; }
+  if (!raw) return;
+  try {
+    const q = new URLSearchParams(raw);
+    const incoming = JSON.parse(q.get('import') || '[]');
+    const from = (q.get('from') || '').replace(/\/+$/, '') + '/';
+    if (!Array.isArray(incoming)) return;
+    const list = pcsLoad();
+    for (const p of incoming) {
+      if (!p || typeof p.url !== 'string') continue;
+      const url = p.url === from ? pcsHere() : p.url;
+      const have = list.find(x => x.url === url);
+      if (have) {
+        for (const k of ['alias', 'pi', 'mac', 'name'])
+          if (p[k] && !have[k]) have[k] = p[k];
+      } else {
+        list.push({ ...p, url });
+      }
+    }
+    pcsSave(list);
+  } catch (e) {}
+}
+
 function pcsLoad(){
   try {
     const raw = localStorage.getItem(PCS_KEY);
@@ -2331,6 +2369,7 @@ async function poll(){
     board.innerHTML = `<div style="padding:40px 10px;text-align:center;color:var(--muted)">
       ${esc(e.message)}</div>`;
   }
+  pcsImport();
   pcsRemember().then(pcsMarkTitle).catch(() => {});
   setInterval(poll, 2500);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

@@ -7,6 +7,8 @@ auth.json
 *.key
 *.pem
 .git-credentials
+# the HTTPS certificate + private key fetched from Tailscale
+tls/
 
 # --- this install's state ----------------------------------------------------
 # NOTE: no trailing comments on these lines. In .gitignore a '#' only starts a

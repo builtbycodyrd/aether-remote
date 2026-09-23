@@ -35,6 +35,7 @@ if os.path.isdir(static):
 hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
+    "update", "wol", "tls",
     "qrcode", "qrcode.image.pil", "PIL", "PIL.Image",
 ]
 
