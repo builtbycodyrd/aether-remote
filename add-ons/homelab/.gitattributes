@@ -1,0 +1,4 @@
+# These run on Linux. A CRLF line ending breaks a shell script outright.
+*.sh       text eol=lf
+*.service  text eol=lf
+*.py       text eol=lf

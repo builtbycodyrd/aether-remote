@@ -1,0 +1,18 @@
+{
+  "port": 8788,
+  "host": "0.0.0.0",
+  "proxmox": {
+    "host": "127.0.0.1",
+    "port": 8006,
+    "node": "pve",
+    "token_id": "aether@pve!homelab",
+    "token_secret": "",
+    "verify_tls": false
+  },
+  "show": {
+    "guests": "all",
+    "services": [],
+    "containers": []
+  },
+  "auto_update": false
+}

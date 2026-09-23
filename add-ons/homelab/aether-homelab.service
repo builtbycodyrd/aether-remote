@@ -1,0 +1,26 @@
+[Unit]
+Description=Aether Homelab add-on
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Program and data are kept apart: an update swaps /opt/aether-homelab/app
+# wholesale, and /var/lib/aether-homelab (login secret, config) is never touched.
+User=aether
+Group=aether
+WorkingDirectory=/opt/aether-homelab/app
+Environment=AETHER_HL_DATA=/var/lib/aether-homelab
+ExecStart=/usr/bin/python3 /opt/aether-homelab/app/server.py
+Restart=always
+RestartSec=2
+# An in-app update restarts this service from a helper it started. Only the
+# main process is stopped, so the helper lives on to check the new version
+# answered - and to roll back if it didn't.
+KillMode=process
+# It never needs to gain privileges; it runs as a plain user.
+NoNewPrivileges=yes
+# Anything it writes (the login secret above all) is private to it.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

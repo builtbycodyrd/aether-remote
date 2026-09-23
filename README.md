@@ -219,6 +219,22 @@ and still point at the same folder.
 
 ---
 
+## Add-ons
+
+**[Homelab](add-ons/homelab/)** — control a Proxmox server from the same
+phone app. It appears in the PC switcher as another device: live server stats,
+start/stop VMs and containers, restart services. One line in the Proxmox shell
+installs it:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/builtbycodyrd/aether-remote/main/add-ons/homelab/install.sh)"
+```
+
+Add-ons are versioned separately from the Windows app (tags like
+`homelab-v0.1.0`), so an add-on update never shows up as a PC update.
+
+---
+
 ## Building it yourself
 
 ```bash
