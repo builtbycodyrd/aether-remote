@@ -9,7 +9,7 @@ existing release is never rewritten, because a link someone already has must
 keep pointing at the bytes they were given.
 """
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 # Windows wants a 4-part tuple for the file version resource.
 VERSION_TUPLE = tuple(int(x) for x in VERSION.split(".")) + (0,)

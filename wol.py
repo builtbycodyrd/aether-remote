@@ -118,6 +118,22 @@ def _split_host(addr):
     return host, port
 
 
+def private_ip(host, port):
+    """Resolve `host` once and return an address on the home network or the
+    tailnet (never the internet), or raise. Callers connect to THAT address,
+    so a DNS answer can't be swapped in between the check and the call."""
+    import ipaddress
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ValueError("can't find %s on the network" % host)
+    for fam, _, _, _, sa in infos:
+        cand = ipaddress.ip_address(sa[0].split("%")[0])
+        if not cand.is_global and not cand.is_multicast and not cand.is_unspecified:
+            return sa[0]
+    raise ValueError("%s isn't on your home network or tailnet" % host)
+
+
 def relay_via(sender, mac, timeout=5):
     """Ask the always-on sender (the Pi) to wake `mac`.
 
@@ -126,22 +142,10 @@ def relay_via(sender, mac, timeout=5):
     poke at the internet. The name is resolved once and that exact address is
     what gets called, so a DNS answer can't be swapped in between."""
     import http.client
-    import ipaddress
     from urllib.parse import quote
     magic_packet(mac)                               # validates the MAC
     host, port = _split_host(sender)
-    try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        raise ValueError("can't find %s on the network" % host)
-    ip = None
-    for fam, _, _, _, sa in infos:
-        cand = ipaddress.ip_address(sa[0].split("%")[0])
-        if not cand.is_global and not cand.is_multicast and not cand.is_unspecified:
-            ip = sa[0]
-            break
-    if ip is None:
-        raise ValueError("%s isn't on your home network or tailnet" % host)
+    ip = private_ip(host, port)
     conn = http.client.HTTPConnection(ip, port, timeout=timeout)
     try:
         conn.request("GET", "/wake?mac=" + quote(mac),
@@ -155,6 +159,44 @@ def relay_via(sender, mac, timeout=5):
     finally:
         conn.close()
     return True
+
+
+def probe(url, timeout=6):
+    """GET <url>ping for the phone, when the phone can't: an https page may
+    not call a plain-http address (the homelab add-on, an older PC). Same
+    rule as the wake relay - home network or tailnet only, resolved once.
+    Returns the ping's JSON (app, pc)."""
+    import http.client
+    import json
+    import ssl
+    from urllib.parse import urlparse
+    u = urlparse(str(url).strip())
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError("that doesn't look like an address")
+    port = u.port or (443 if u.scheme == "https" else 80)
+    ip = private_ip(u.hostname, port)
+    path = (u.path.rstrip("/") or "") + "/ping"
+    if u.scheme == "https":
+        # Connect to the checked address, but verify the certificate against
+        # the NAME, as a browser would.
+        ctx = ssl.create_default_context()
+        raw = socket.create_connection((ip, port), timeout=timeout)
+        sock = ctx.wrap_socket(raw, server_hostname=u.hostname)
+        conn = http.client.HTTPSConnection(u.hostname, port, timeout=timeout, context=ctx)
+        conn.sock = sock
+    else:
+        conn = http.client.HTTPConnection(ip, port, timeout=timeout)
+    try:
+        conn.request("GET", path, headers={"Host": u.netloc})
+        r = conn.getresponse()
+        body = r.read(4096)
+        if r.status != 200:
+            raise ValueError("it answered %d" % r.status)
+        return json.loads(body.decode("utf-8", "replace"))
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        raise ValueError("no answer from %s (%s)" % (u.netloc, e))
+    finally:
+        conn.close()
 
 
 # The listener the always-on box (Pi 400) runs. Standard library only, so it

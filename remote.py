@@ -787,6 +787,20 @@ class Handler(BaseHTTPRequestHandler):
                                             "sent_here": here})
                 return self._send(200, {"ok": True, "via": "pi" if pi else "here"})
 
+            if path == "/api/pcs/probe":
+                # "Add a PC" check for an address the https page may not call
+                # itself (plain http - the homelab add-on, or an older PC).
+                try:
+                    j = wol.probe(str(b.get("url", ""))[:300])
+                except Exception as e:
+                    return self._send(502, {"ok": False, "error": str(e)})
+                j = j if isinstance(j, dict) else {}
+                app = str(j.get("app", ""))[:40]
+                if app not in ("remote", "aether-homelab"):
+                    return self._send(502, {"ok": False, "error": "not an Aether app"})
+                return self._send(200, {"ok": True, "app": app,
+                                        "pc": str(j.get("pc", ""))[:60]})
+
             # ---- desktop input ----
             if path == "/api/click":
                 stream.click(int(b.get("mon", 0)),

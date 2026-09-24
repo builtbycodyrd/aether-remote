@@ -2393,18 +2393,30 @@ $('#sheetBody').addEventListener('click', async e => {
     // and say so.
     const ac = new AbortController();
     const bail = setTimeout(() => ac.abort(), 6000);
+    // An https page isn't allowed to call a plain-http address, and the
+    // homelab add-on doesn't answer cross-origin calls at all - so when the
+    // phone can't check it itself, this PC checks it instead. Either way it
+    // must answer as an Aether app.
+    const mixed = location.protocol === 'https:' && /^http:/i.test(url);
     try {
-      const r = await fetch(url + 'ping', {cache:'no-store', signal:ac.signal});
-      const j = await r.json();
-      if (!j || j.app !== 'remote') throw new Error('not an Aether Remote');
+      let j = null;
+      if (!mixed){
+        try { j = await (await fetch(url + 'ping', {cache:'no-store', signal:ac.signal})).json(); }
+        catch(e){ j = null; }
+      }
+      if (!j) j = await api('/api/pcs/probe', { url });
+      if (!j || (j.app !== 'remote' && j.app !== 'aether-homelab'))
+        throw new Error('not an Aether app');
+      const name = j.pc || (j.app === 'aether-homelab' ? 'Homelab' : 'PC');
       const list = pcsLoad();
-      list.push({name: j.pc || 'PC', url});
+      list.push({name, url});
       pcsSave(list);
       openPCs();
-      toast('Added ' + (j.pc || 'PC') + ' — tap Rename to give it your own name');
+      toast('Added ' + name + ' \u2014 tap Rename to give it your own name');
     } catch(err){
-      msg.innerHTML = 'Could not reach it. Check the PC is on, the address is '
-        + 'right, and your phone is on the same network or tailnet as it.';
+      msg.innerHTML = 'Could not reach it. Check it is on, the address is '
+        + 'right (including <b>:8788</b> for the homelab add-on), and your phone '
+        + 'is on the same network or tailnet as it.';
     } finally {
       clearTimeout(bail);
     }
