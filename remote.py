@@ -1793,11 +1793,38 @@ def lan_ips():
     return out
 
 
+def _claim_port(port):
+    """A named mutex per port; the OS drops it when this process ends, however
+    it ends. True = we're the only server on this port."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        h = k32.CreateMutexW(None, True, "AetherRemoteServer-%d" % port)
+        if ctypes.get_last_error() == 183:     # ERROR_ALREADY_EXISTS
+            return False
+        _claim_port.handle = h                 # keep it for the process's life
+        return True
+    except Exception:
+        return True                            # never let the guard block a start
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default=CFG.get("host", "0.0.0.0"))
     ap.add_argument("--port", type=int, default=CFG.get("port", 8787))
     a = ap.parse_args()
+
+    # One server per port. Windows lets a second process bind a port the
+    # first already holds, then splits connections between the two at random -
+    # a phone's Face ID challenge issued by one and checked by the other just
+    # fails. Both the supervisor and the tray restart a dead server, and they
+    # can race, so the guard lives here where it can't be skipped.
+    if not _claim_port(a.port):
+        log("another Aether Remote server already runs on port %d - exiting" % a.port)
+        return 3
 
     host = resolve_host(a.host)
 

@@ -185,6 +185,12 @@ class Server:
             self.proc.wait()
             if self.stop_flag:
                 return
+            # Ours died but the port is answering: the supervisor (or another
+            # copy) has it. Don't fight it for the port - step back.
+            time.sleep(3)
+            if server_running():
+                self.proc = None
+                return
             backoff = 3 if time.time() - started > 60 else min(backoff * 2, 60)
             time.sleep(backoff)
 
