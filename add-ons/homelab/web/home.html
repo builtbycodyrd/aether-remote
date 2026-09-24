@@ -89,6 +89,16 @@
   #notes h4{margin:14px 0 6px;font-size:13px;color:var(--secondary)}
   #notes li,#notes p{font-size:13px;line-height:1.55;color:var(--text)}
   #notes .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+  /* PIN lock + prompt: above everything but the toast */
+  #sf{position:fixed;inset:0;background:rgba(6,6,10,.94);backdrop-filter:blur(8px);
+    display:flex;align-items:center;justify-content:center;padding:24px;z-index:58}
+  #sf[hidden]{display:none !important}
+  #sf input{width:100%;font-size:24px;text-align:center;letter-spacing:6px;
+    padding:12px;border-radius:12px;border:1px solid var(--line2);
+    background:#0c0c11;color:var(--text);margin-top:8px}
+  #sf .ghost{background:transparent;border:1px solid var(--line2);color:var(--text)}
+  #sfErr{color:var(--bad);font-size:12.5px;min-height:16px;margin-top:8px}
+  #pinBtn{margin-left:8px}
 </style>
 </head>
 <body>
@@ -96,6 +106,7 @@
     <div class="dot" id="live"></div>
     <h1>Homelab</h1>
     <div class="sub" id="meta">connecting…</div>
+    <button class="sbtn" id="pinBtn" aria-label="PIN settings">PIN</button>
   </header>
   <div id="updbar" hidden>
     <div class="txt"><b id="ubTitle"></b><span id="ubSub"></span></div>
@@ -124,6 +135,20 @@
       <button class="btn" id="go">Sign in</button>
       <div id="err"></div>
       <div class="enroll" id="enroll"></div>
+    </div>
+  </div>
+  <div id="sf" hidden role="dialog" aria-modal="true" aria-labelledby="sfTitle">
+    <div class="card">
+      <h3 id="sfTitle"></h3>
+      <p id="sfSub"></p>
+      <input id="sfPin" type="password" inputmode="numeric" autocomplete="off"
+             maxlength="12" placeholder="PIN">
+      <input id="sfPin2" type="password" inputmode="numeric" autocomplete="off"
+             maxlength="12" placeholder="Same PIN again" hidden>
+      <button class="btn" id="sfGo"></button>
+      <button class="btn ghost" id="sfOff" hidden>Turn the PIN off</button>
+      <button class="btn ghost" id="sfCancel">Cancel</button>
+      <div id="sfErr"></div>
     </div>
   </div>
   <div id="toast"></div>

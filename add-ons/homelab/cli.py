@@ -3,6 +3,7 @@
     aether-homelab code         show the login QR / secret for your authenticator
     aether-homelab status       version, service state, address, update status
     aether-homelab reset-login  new authenticator secret + sign every phone out
+    aether-homelab reset-pin    turn off the PIN (for a forgotten one)
     aether-homelab update       same as the `update` command
 
 Having root in this container already means being able to read the secret on
@@ -73,6 +74,44 @@ def status():
         print("  update  : couldn't check (%s)" % e)
 
 
+def _restart_service():
+    """The running add-on keeps its state in memory, so a change made here
+    only counts once it restarts. The service runs as this same user, so it
+    may end its own main process - systemd (Restart=always) brings it back."""
+    try:
+        pid = int(subprocess.run(
+            ["systemctl", "show", "-p", "MainPID", "--value", "aether-homelab"],
+            capture_output=True, text=True, timeout=10).stdout.strip() or 0)
+    except Exception:
+        pid = 0
+    if pid > 0:
+        try:
+            os.kill(pid, 15)
+            print("(restarted the add-on so the change takes effect)")
+            return
+        except OSError:
+            pass
+    print("Restart the add-on for this to take effect:  systemctl restart aether-homelab")
+
+
+def reset_pin():
+    import auth
+    import secondfactor
+    sf = secondfactor.SecondFactor(paths.data("sf.json"), lambda: auth.STATE["server_key"],
+                                   log=lambda m: None)
+    if not sf.enabled():
+        print("No PIN is set - nothing to reset.")
+        return
+    answer = input("This turns the PIN off. Phones can set a new one from the "
+                   "app. Type RESET to continue: ")
+    if answer.strip() != "RESET":
+        print("Nothing changed.")
+        return
+    sf.reset()
+    print("Done - the PIN is off.")
+    _restart_service()
+
+
 def reset_login():
     import auth
     answer = input("This signs out every phone and needs a new authenticator "
@@ -83,6 +122,7 @@ def reset_login():
     auth.reset_enrollment()
     print("Done. Scan the new code:")
     code()
+    _restart_service()
 
 
 def main():
@@ -93,6 +133,8 @@ def main():
         status()
     elif cmd == "reset-login":
         reset_login()
+    elif cmd == "reset-pin":
+        reset_pin()
     elif cmd == "update":
         os.execv("/bin/sh", ["/bin/sh", paths.asset("update.sh")] + sys.argv[2:])
     else:

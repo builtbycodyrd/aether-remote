@@ -59,6 +59,23 @@ it, or to replace its Proxmox token (use that if you ever think it leaked).
 | `aether-homelab status` | version, service state, address, update status |
 | `aether-homelab code` | show the login QR again (e.g. for a new phone) |
 | `aether-homelab reset-login` | new authenticator secret, signs every phone out |
+| `aether-homelab reset-pin` | turn the PIN off (if you forgot it) |
+
+## The PIN
+
+Shutting down or force-stopping a VM or container needs a PIN every time;
+starting one doesn't. The first time you try, it asks you to pick one (4 to 12
+digits). Once a PIN is set, opening the page asks for it too, and it locks
+again after 5 minutes in the background. The server enforces all of this, not
+just the page.
+
+The **PIN** button at the top changes it or turns it off (it asks for the
+current one first). Five wrong tries lock it for 5 minutes, then longer each
+time. A forgotten PIN can only be reset from the container: `aether-homelab
+reset-pin`.
+
+Face ID isn't offered here: it needs a secure (https) address, and the add-on
+is reached over plain http on your home network.
 
 ## Settings
 

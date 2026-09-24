@@ -1,3 +1,23 @@
+# 0.2.0
+
+A PIN for the things that can't be undone.
+
+- **VM shut downs need your PIN.** Shutting down or force-stopping a VM or
+  container asks for it every time; starting one doesn't. The first time you
+  try, it asks you to pick a PIN (4 to 12 digits).
+- **The page locks when you open it.** Once a PIN is set, opening the page asks
+  for it, and it locks again after 5 minutes in the background.
+- The **PIN** button at the top changes it or turns it off (it asks for the
+  current one first).
+- Five wrong tries lock it for 5 minutes, then longer each time.
+- Forgot it? In the container: `aether-homelab reset-pin`. There is no way to
+  reset it over the network.
+- `aether-homelab reset-login` now takes effect straight away (it used to wait
+  for the add-on to restart).
+
+Face ID isn't offered here: it needs a secure (https) address, and the add-on
+is reached over plain http on your home network.
+
 # 0.1.1
 
 Installer fixes, from the first real install.

@@ -6,7 +6,7 @@ reads the repo's latest Release) can never mistake an add-on version for a
 Windows update.
 """
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 TAG_PREFIX = "homelab-v"
 TAG = TAG_PREFIX + VERSION
 REPO = "builtbycodyrd/aether-remote"

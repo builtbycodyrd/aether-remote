@@ -14,7 +14,7 @@ function toast(msg) {
   toast._t = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-async function api(path, body) {
+async function api(path, body, _tries) {
   const opt = { headers: {} };
   if (body !== undefined) {
     opt.method = 'POST';
@@ -26,9 +26,172 @@ async function api(path, body) {
   const txt = await r.text();
   let data = {};
   try { data = txt ? JSON.parse(txt) : {}; } catch (e) {}
-  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  const tries = _tries || 0;
+  // The server wants the PIN. Every call comes through here, so no button
+  // has to know about it on its own.
+  if (r.status === 403 && tries < 2 && data.error === 'locked') {
+    await sfUnlock();
+    return api(path, body, tries + 1);
+  }
+  if (r.status === 403 && tries < 2 && data.error === 'stepup') {
+    if (data.setup) await sfSetup('first');
+    const token = await sfStepUp(data.scope);
+    return api(path, { ...(body || {}), stepup: token }, tries + 1);
+  }
+  if (!r.ok) { const e = new Error(data.error || ('HTTP ' + r.status)); e.data = data; throw e; }
   return data;
 }
+
+/* ---- the PIN: asked when the app opens, and for every VM stop / shut
+ * down. The SERVER enforces it - this is only the part you see. ---- */
+const SFX = { st: null, unlocking: null };
+
+async function sfStatus() {
+  const r = await fetch('/api/sf/status', { cache: 'no-store' });
+  if (r.status === 401) { showLogin(); throw new Error('unauth'); }
+  SFX.st = await r.json();
+  return SFX.st;
+}
+
+async function sfPost(path, body) {
+  const r = await fetch(path, { method: 'POST', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; throw e; }
+  return j;
+}
+
+function scopeText(s) {
+  if (s === 'guest.shutdown') return 'Shut down a VM';
+  if (s === 'guest.stop') return 'Force-stop a VM';
+  if (s === 'guest.reboot') return 'Reboot a VM';
+  if (s === 'settings') return 'Change the PIN';
+  return 'Confirm';
+}
+
+/* One dialog for everything. mode: 'unlock' | 'stepup' | 'set'.
+   Resolves with the server's answer; rejects on Cancel. */
+function sfDialog(mode, scope, opts) {
+  opts = opts || {};
+  return new Promise((resolve, reject) => {
+    const st = SFX.st || {};
+    const set = mode === 'set';
+    $('#sfTitle').textContent = mode === 'unlock' ? 'Homelab is locked'
+      : set ? (opts.first ? 'Protect VM shutdowns' : 'Change your PIN') : scopeText(scope);
+    $('#sfSub').textContent = mode === 'unlock' ? 'Enter your PIN to open it.'
+      : set ? (opts.first
+          ? 'Shutting down a VM needs a PIN every time. Pick one - it also locks this page each time you open it.'
+          : 'Asked when you open this page, and for every VM shut down.')
+      : 'Enter your PIN to confirm.';
+    $('#sfPin').value = ''; $('#sfPin2').value = '';
+    $('#sfPin').placeholder = set ? 'New PIN (4 to 12 digits)' : 'PIN';
+    $('#sfPin2').hidden = !set;
+    $('#sfGo').textContent = mode === 'unlock' ? 'Unlock' : set ? 'Save PIN' : 'Confirm';
+    $('#sfOff').hidden = !(set && st.enabled && !opts.first);
+    $('#sfCancel').hidden = mode === 'unlock';
+    $('#sfErr').textContent = st.locked_for && !set
+      ? 'Too many wrong tries. Try again in ' + Math.ceil(st.locked_for / 60) + ' min.' : '';
+    $('#sf').hidden = false;
+    setTimeout(() => $('#sfPin').focus(), 80);
+
+    const done = (fn, v) => { $('#sf').hidden = true; cleanup(); fn(v); };
+    const go = async () => {
+      $('#sfGo').disabled = true; $('#sfErr').textContent = '';
+      try {
+        let res;
+        if (set) {
+          const a = $('#sfPin').value, b = $('#sfPin2').value;
+          if (!/^\d{4,12}$/.test(a)) throw new Error('A PIN is 4 to 12 digits.');
+          if (a !== b) throw new Error("The two PINs don't match.");
+          res = await sfPost('/api/sf/pin', { pin: a, ...(opts.proof || {}) });
+        } else {
+          res = await sfPost('/api/sf/verify', { purpose: mode, scope, pin: $('#sfPin').value });
+        }
+        try { sessionStorage.setItem('hl.unlocked', '1'); } catch (e) {}
+        done(resolve, res);
+      } catch (e) {
+        $('#sfErr').textContent = e.message;
+        $('#sfPin').value = '';
+        if (e.data && e.data.locked_for && SFX.st) SFX.st.locked_for = e.data.locked_for;
+      }
+      $('#sfGo').disabled = false;
+    };
+    const off = async () => {
+      try { done(resolve, await sfPost('/api/sf/disable', opts.proof || {})); }
+      catch (e) { $('#sfErr').textContent = e.message; }
+    };
+    const key = e => { if (e.key === 'Enter') go(); };
+    const cancel = () => done(reject, new Error('Cancelled'));
+    function cleanup() {
+      $('#sfGo').removeEventListener('click', go);
+      $('#sfOff').removeEventListener('click', off);
+      $('#sfCancel').removeEventListener('click', cancel);
+      $('#sfPin').removeEventListener('keydown', key);
+      $('#sfPin2').removeEventListener('keydown', key);
+    }
+    $('#sfGo').addEventListener('click', go);
+    $('#sfOff').addEventListener('click', off);
+    $('#sfCancel').addEventListener('click', cancel);
+    $('#sfPin').addEventListener('keydown', key);
+    $('#sfPin2').addEventListener('keydown', key);
+  });
+}
+
+/* The poll and a tap can both hit "locked" at once - one prompt serves both. */
+async function sfUnlock() {
+  if (!SFX.unlocking) {
+    SFX.unlocking = (async () => {
+      await sfStatus();
+      if (!SFX.st.enabled || SFX.st.unlocked) return;
+      await sfDialog('unlock', '');
+    })().finally(() => { SFX.unlocking = null; });
+  }
+  return SFX.unlocking;
+}
+
+async function sfStepUp(scope) {
+  await sfStatus();
+  return (await sfDialog('stepup', scope)).stepup;
+}
+
+async function sfSetup(why) {
+  await sfStatus();
+  // Changing an existing PIN needs the current one first.
+  const proof = SFX.st.enabled ? { stepup: await sfStepUp('settings') } : {};
+  const res = await sfDialog('set', '', { first: why === 'first', proof });
+  await sfStatus();
+  toast(res && res.enabled === false ? 'PIN turned off' : 'PIN saved');
+}
+
+/* Opening the page always asks - a still-valid unlock from last time
+   doesn't count. A reload inside the same visit doesn't ask again. */
+async function sfOnLaunch() {
+  let st;
+  try { st = await sfStatus(); } catch (e) { return; }
+  if (!st.enabled) return;
+  let fresh = true;
+  try { fresh = !sessionStorage.getItem('hl.unlocked'); } catch (e) {}
+  if (fresh) { await sfPost('/api/sf/lock').catch(() => {}); st.unlocked = false; }
+  if (!st.unlocked) await sfUnlock();
+}
+
+/* Away for 5+ minutes -> locked again when you come back. */
+const SF_AWAY_MS = 5 * 60 * 1000;
+document.addEventListener('visibilitychange', async () => {
+  try {
+    if (document.hidden) { sessionStorage.setItem('hl.hiddenAt', String(Date.now())); return; }
+    const at = +sessionStorage.getItem('hl.hiddenAt') || 0;
+    if (!at || Date.now() - at < SF_AWAY_MS) return;
+    sessionStorage.removeItem('hl.hiddenAt');
+    if (!SFX.st || !SFX.st.enabled) return;
+    sessionStorage.removeItem('hl.unlocked');
+    await sfPost('/api/sf/lock').catch(() => {});
+    await sfUnlock();
+  } catch (e) {}
+});
+
+$('#pinBtn').addEventListener('click', () => { sfSetup('settings').catch(() => {}); });
 
 async function refresh() {
   try {
@@ -77,6 +240,8 @@ async function doLogin() {
   try {
     await api('/api/login', { code });
     $('#code').value = '';
+    hideLogin();
+    await sfOnLaunch();
     startPolling();
   } catch (e) {
     $('#err').textContent = e.message || 'Wrong code.';
@@ -167,7 +332,7 @@ $('#app').addEventListener('click', async e => {
     try {
       await api('/api/guest', { ref, action });
       toast((on ? 'Shutting down ' : 'Starting ') + ref);
-    } catch (err) { toast(err.message); }
+    } catch (err) { if (err.message !== 'Cancelled') toast(err.message); }
     setTimeout(() => { delete S.busy[ref]; refresh(); }, 3500);
     return;
   }
@@ -285,4 +450,4 @@ $('#ubSkip').addEventListener('click', async () => {
   updPaint();
 });
 
-startPolling();
+(async () => { await sfOnLaunch(); startPolling(); })();
