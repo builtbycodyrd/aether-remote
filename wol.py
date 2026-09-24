@@ -100,6 +100,63 @@ def send_wol(mac, broadcast="255.255.255.255"):
     return True
 
 
+def _split_host(addr):
+    """'pi', 'pi:8788', 'http://10.0.0.5:8788/' -> (host, port)."""
+    a = re.sub(r"^[a-z]+://", "", str(addr).strip(), flags=re.I).split("/")[0]
+    if not a or len(a) > 253:
+        raise ValueError("no wake sender address")
+    m = re.fullmatch(r"\[([0-9A-Fa-f:.]+)\](?::(\d{1,5}))?", a)       # [v6]:port
+    if m:
+        host, port = m.group(1), m.group(2)
+    elif a.count(":") == 1:
+        host, port = a.split(":")
+    else:
+        host, port = a, None
+    port = int(port) if port else 8788
+    if not (0 < port < 65536) or not re.fullmatch(r"[A-Za-z0-9.\-:]+", host):
+        raise ValueError("that isn't a valid wake sender address")
+    return host, port
+
+
+def relay_via(sender, mac, timeout=5):
+    """Ask the always-on sender (the Pi) to wake `mac`.
+
+    Only ever to an address on the home network or the tailnet: this is the
+    PC making a request on a phone's say-so, so it must not become a way to
+    poke at the internet. The name is resolved once and that exact address is
+    what gets called, so a DNS answer can't be swapped in between."""
+    import http.client
+    import ipaddress
+    from urllib.parse import quote
+    magic_packet(mac)                               # validates the MAC
+    host, port = _split_host(sender)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ValueError("can't find %s on the network" % host)
+    ip = None
+    for fam, _, _, _, sa in infos:
+        cand = ipaddress.ip_address(sa[0].split("%")[0])
+        if not cand.is_global and not cand.is_multicast and not cand.is_unspecified:
+            ip = sa[0]
+            break
+    if ip is None:
+        raise ValueError("%s isn't on your home network or tailnet" % host)
+    conn = http.client.HTTPConnection(ip, port, timeout=timeout)
+    try:
+        conn.request("GET", "/wake?mac=" + quote(mac),
+                     headers={"Host": host if ":" not in host else "[%s]" % host})
+        r = conn.getresponse()
+        r.read(4096)
+        if r.status != 200:
+            raise ValueError("the wake sender said %d" % r.status)
+    except (OSError, http.client.HTTPException):
+        raise ValueError("no answer from %s:%d" % (host, port))
+    finally:
+        conn.close()
+    return True
+
+
 # The listener the always-on box (Pi 400) runs. Standard library only, so it
 # drops onto a Pi with nothing to install. Shown in the PC's Settings with the
 # systemd steps.

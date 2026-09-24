@@ -2349,16 +2349,17 @@ $('#sheetBody').addEventListener('click', async e => {
   if (wake){
     const p = pcsLoad()[+wake.dataset.wakepc];
     if (!p || !p.pi || !p.mac) return;
-    let host = String(p.pi).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-    if (!/:\d+$/.test(host)) host += ':8788';
-    wake.textContent = 'Waking…';
+    const host = String(p.pi).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    wake.textContent = 'Waking\u2026';
+    // This PC calls the Pi for us. The page is https now, and a browser won't
+    // let an https page call the Pi's plain-http address itself.
     try {
-      const r = await fetch('http://' + host + '/wake?mac=' + encodeURIComponent(p.mac),
-                            { cache: 'no-store' });
-      if (!r.ok) throw new Error('bad');
-      toast('Wake sent to ' + pcsDisp(p) + ' — give it a moment to boot.');
+      await api('/api/wol/wake', { mac: p.mac, pi: host });
+      toast('Wake sent to ' + pcsDisp(p) + ' \u2014 give it a moment to boot.');
     } catch(err){
-      toast("Couldn't reach the Pi at " + host + '.');
+      const d = err.data || {};
+      toast("Couldn't reach the Pi at " + host + (d.sent_here
+        ? ' \u2014 sent the wake signal from this PC instead.' : '.'));
     }
     wake.textContent = 'Wake';
     return;

@@ -751,14 +751,41 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200 if r.get("ok") else 400, r)
 
             if path == "/api/wol/send":
-                # This PC sends a magic packet on its LAN - the fallback for
-                # when another Aether PC on the same network is awake. The Pi
-                # is the usual sender and the phone calls it directly.
+                # This PC sends a magic packet on its own LAN (no Pi involved).
                 try:
                     wol.send_wol(str(b.get("mac", "")))
                     return self._send(200, {"ok": True})
                 except Exception as e:
                     return self._send(400, {"ok": False, "error": str(e)})
+
+            if path == "/api/wol/wake":
+                # Wake another PC. The phone can't call the Pi itself any
+                # more: this page is https, and browsers block a plain-http
+                # request from it. So this PC makes the call for it - and also
+                # sends the packet on its own LAN, which covers a PC next to it.
+                mac = str(b.get("mac", ""))
+                pi = str(b.get("pi", "")).strip()
+                try:
+                    wol.magic_packet(mac)
+                except ValueError as e:
+                    return self._send(400, {"ok": False, "error": str(e)})
+                pi_err = None
+                if pi:
+                    try:
+                        wol.relay_via(pi, mac)
+                    except Exception as e:
+                        pi_err = str(e) or "no answer"
+                try:
+                    wol.send_wol(mac)
+                    here = True
+                except OSError:
+                    here = False
+                log("wake %s via %s -> %s" % (mac, pi or "this PC",
+                                              "ok" if not pi_err else pi_err))
+                if pi and pi_err:
+                    return self._send(502, {"ok": False, "error": pi_err,
+                                            "sent_here": here})
+                return self._send(200, {"ok": True, "via": "pi" if pi else "here"})
 
             # ---- desktop input ----
             if path == "/api/click":
