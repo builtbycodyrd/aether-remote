@@ -606,7 +606,7 @@ try {
  $s = $mgr.GetCurrentSession()
  if($s){
   $i=$s.GetPlaybackInfo()
-  $p = Await ($s.GetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+  $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
   [pscustomobject]@{title=$p.Title;artist=$p.Artist;album=$p.AlbumTitle;app=$s.SourceAppUserModelId;status=[int]$i.PlaybackStatus} | ConvertTo-Json -Compress
  } else { '{}' }
 } catch { '{}' }
