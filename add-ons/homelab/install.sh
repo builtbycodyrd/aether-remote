@@ -37,7 +37,30 @@ for c in pct pveum pvesh pveam pvesm python3 curl; do
 done
 
 TMP="$(mktemp -d)"; chmod 700 "$TMP"
-trap 'rm -rf "$TMP"' EXIT
+MADE_CT=""        # set once THIS run creates a container
+MADE_TOKEN=""     # set once THIS run creates the API token
+KEEP=""           # set once the install is far enough along to keep
+cleanup() {
+  rc=$?
+  if [ "$rc" != 0 ] && [ -z "$KEEP" ]; then
+    if [ -n "$MADE_CT" ] || [ -n "$MADE_TOKEN" ]; then
+      echo "${y}!!${n} Install failed - undoing what this run set up:"
+    fi
+    # Only ever what THIS run created: the new container and its token.
+    if [ -n "$MADE_CT" ]; then
+      pct stop "$MADE_CT" >/dev/null 2>&1 || true
+      pct destroy "$MADE_CT" --purge >/dev/null 2>&1 \
+        && echo "   removed container $MADE_CT" \
+        || echo "   couldn't remove container $MADE_CT - remove it with: pct destroy $MADE_CT"
+    fi
+    if [ -n "$MADE_TOKEN" ]; then
+      pveum user token remove "$PVE_USER" "$TOKEN_NAME" >/dev/null 2>&1 \
+        && echo "   removed the API token $PVE_USER!$TOKEN_NAME" || true
+    fi
+  fi
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 NODE="$(hostname -s)"            # the Proxmox node name is the short hostname
 yes_() { case "$1" in y|Y|yes|Yes|YES) return 0 ;; *) return 1 ;; esac; }
 
@@ -57,6 +80,26 @@ for t in json.load(sys.stdin):
 print(best[1] if best else "")')" || die "couldn't reach GitHub from this host"
   [ -n "$TAG" ] || die "couldn't find a released version on GitHub"
   REF="refs/tags/$TAG"
+fi
+
+# ---------------------------------------- download the add-on (host side)
+# Fetched here, before anything is created, so a network hiccup costs nothing.
+# The container then gets the files pushed in and never needs GitHub to install.
+fetch_src() {
+  curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors \
+    -o "$TMP/src.tgz" "$CODELOAD/$REPO/tar.gz/$REF" \
+    && tar tzf "$TMP/src.tgz" > "$TMP/src.lst" 2>/dev/null \
+    && grep -q '/add-ons/homelab/server\.py$' "$TMP/src.lst"
+}
+if ! fetch_src; then
+  echo
+  warn "couldn't download the add-on from GitHub. Nothing was changed."
+  echo "   This host asks the DNS server(s): $(awk '/^nameserver/ {printf "%s ", $2}' /etc/resolv.conf)"
+  getent hosts codeload.github.com >/dev/null \
+    || echo "   ...and they can't find codeload.github.com. If that's a Pi-hole or"
+  getent hosts codeload.github.com >/dev/null \
+    || echo "   AdGuard, allow codeload.github.com (GitHub's download server)."
+  die "try again in a minute"
 fi
 
 # ------------------------------------------------------------ API token
@@ -102,40 +145,160 @@ PY
   chmod 600 "$1"
 }
 
+# ------------------------------------------------ steps shared by all paths
+ct_running() { pct status "$1" 2>/dev/null | grep -q running; }
+
+wait_net() {   # $1 = CTID
+  say "Waiting for the container's network"
+  for _ in $(seq 1 60); do
+    pct exec "$1" -- getent hosts deb.debian.org >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "container $1 has no network - check the bridge/IP and re-run"
+}
+
+install_into() {   # $1 = CTID - push the downloaded add-on in and set it up
+  say "Installing the add-on inside the container"
+  cat > "$TMP/setup.sh" <<'SETUP'
+#!/bin/bash
+set -euo pipefail
+# A fresh container has no locales; without this apt and perl complain loudly.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none
+apt-get update -qq
+apt-get install -y -qq python3 python3-cryptography curl ca-certificates qrencode >/dev/null
+id aether >/dev/null 2>&1 || useradd --system --home-dir /var/lib/aether-homelab \
+  --shell /usr/sbin/nologin aether
+install -d -o aether -g aether -m 755 /opt/aether-homelab
+install -d -o aether -g aether -m 700 /var/lib/aether-homelab
+work="$(mktemp -d)"; trap 'rm -rf "$work" /root/aether-src.tgz' EXIT
+tar xzf /root/aether-src.tgz -C "$work"
+src="$(find "$work" -maxdepth 3 -type d -path '*/add-ons/homelab' | head -n 1)"
+[ -n "$src" ] && [ -f "$src/server.py" ] || { echo "download looks wrong"; exit 1; }
+rm -rf /opt/aether-homelab/app
+cp -a "$src" /opt/aether-homelab/app
+chown -R aether:aether /opt/aether-homelab
+install -m 644 /opt/aether-homelab/app/aether-homelab.service /etc/systemd/system/aether-homelab.service
+cat > /usr/local/bin/update <<'W'
+#!/bin/sh
+# Update the Aether homelab add-on to the newest release.
+exec runuser -u aether -- env AETHER_HL_DATA=/var/lib/aether-homelab \
+  /bin/sh /opt/aether-homelab/app/update.sh "$@"
+W
+cat > /usr/local/bin/aether-homelab <<'W'
+#!/bin/sh
+umask 077
+cd /opt/aether-homelab/app
+exec runuser -u aether -- env AETHER_HL_DATA=/var/lib/aether-homelab \
+  python3 /opt/aether-homelab/app/cli.py "$@"
+W
+chmod 755 /usr/local/bin/update /usr/local/bin/aether-homelab
+systemctl daemon-reload
+systemctl enable -q aether-homelab
+SETUP
+  pct push "$1" "$TMP/src.tgz" /root/aether-src.tgz
+  pct push "$1" "$TMP/setup.sh" /root/aether-setup.sh
+  pct exec "$1" -- bash /root/aether-setup.sh
+  pct exec "$1" -- rm -f /root/aether-setup.sh
+}
+
+configure_and_start() {   # $1 = CTID, $2 = host ip, $3 = auto (1/0)
+  write_config "$TMP/config.json" "$2" "$3"
+  pct push "$1" "$TMP/config.json" /var/lib/aether-homelab/config.json
+  pct exec "$1" -- sh -c 'chown aether:aether /var/lib/aether-homelab/config.json && chmod 600 /var/lib/aether-homelab/config.json'
+  pct exec "$1" -- systemctl restart aether-homelab
+  # From here the container is complete: a failure below is something to
+  # look at, not a reason to throw the whole install away.
+  KEEP=1
+  say "Starting the add-on"
+  for _ in $(seq 1 30); do
+    pct exec "$1" -- curl -fsS http://127.0.0.1:8788/ping >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "the add-on didn't start - see: pct exec $1 -- journalctl -u aether-homelab"
+}
+
+finish() {   # $1 = CTID
+  CT_IP="$(pct exec "$1" -- hostname -I | awk '{print $1}')"
+  # Updates come from GitHub; say so now if this container can't see it.
+  if ! pct exec "$1" -- getent hosts codeload.github.com >/dev/null 2>&1; then
+    warn "the container can't look up codeload.github.com, so updates will fail."
+    echo "   If your DNS is a Pi-hole or AdGuard, allow codeload.github.com."
+  fi
+  pct exec "$1" -- /usr/local/bin/aether-homelab code
+  echo
+  say "${b}Installed.${n}"
+  echo "   Open on your phone:   ${b}http://$CT_IP:8788${n}"
+  echo "   In Aether Remote, add it to your PC switcher with that address."
+  echo "   Inside the container: 'update' gets the newest version,"
+  echo "                         'aether-homelab status' shows how it's doing."
+  echo "   Run this installer again any time to update it or replace its token."
+}
+
+ask_auto() {
+  if yes_ "$(ask "Install updates automatically? (y/n)" "y")"; then AUTO=1; else AUTO=0; fi
+}
+
+bridge_ip() {   # $1 = bridge -> this host's IPv4 on it
+  ip -4 -o addr show "$1" | awk '{print $4}' | cut -d/ -f1 | head -n 1
+}
+
 # --------------------------------------------------- already installed?
 EXISTING="$(grep -l "^tags:.*$CT_TAG" /etc/pve/lxc/*.conf 2>/dev/null | head -n 1 || true)"
 if [ -n "$EXISTING" ]; then
   CTID="$(basename "$EXISTING" .conf)"
-  echo
-  say "Aether Homelab is already installed in container ${b}$CTID${n}."
-  echo "   u = update it to the newest version"
-  echo "   t = replace its Proxmox API token (e.g. if you think it leaked)"
-  echo "   q = quit"
-  choice="$(ask "What do you want to do?" u)"
-  case "$choice" in
-    u|U)
-      pct exec "$CTID" -- /usr/local/bin/update || true
-      pct exec "$CTID" -- /usr/local/bin/aether-homelab status
-      exit 0 ;;
-    t|T)
-      make_token; check_token
-      pct exec "$CTID" -- cat /var/lib/aether-homelab/config.json > "$TMP/old.json"
-      # Swap only the token; keep every other setting you've changed.
-      SECRET="$(cat "$TMP/secret")" python3 - "$TMP/old.json" "$PVE_USER!$TOKEN_NAME" \
-        > "$TMP/config.json" <<'PY'
+  ct_running "$CTID" || pct start "$CTID"
+  sleep 2
+  if pct exec "$CTID" -- test -f /opt/aether-homelab/app/server.py \
+     && pct exec "$CTID" -- test -f /var/lib/aether-homelab/config.json; then
+    echo
+    say "Aether Homelab is already installed in container ${b}$CTID${n}."
+    echo "   u = update it to the newest version"
+    echo "   t = replace its Proxmox API token (e.g. if you think it leaked)"
+    echo "   q = quit"
+    choice="$(ask "What do you want to do?" u)"
+    case "$choice" in
+      u|U)
+        pct exec "$CTID" -- /usr/local/bin/update || true
+        pct exec "$CTID" -- /usr/local/bin/aether-homelab status
+        exit 0 ;;
+      t|T)
+        make_token; check_token
+        pct exec "$CTID" -- cat /var/lib/aether-homelab/config.json > "$TMP/old.json"
+        # Swap only the token; keep every other setting you've changed.
+        SECRET="$(cat "$TMP/secret")" python3 - "$TMP/old.json" "$PVE_USER!$TOKEN_NAME" \
+          > "$TMP/config.json" <<'PY'
 import json, os, sys
 c = json.load(open(sys.argv[1]))
 c.setdefault("proxmox", {})["token_id"] = sys.argv[2]
 c["proxmox"]["token_secret"] = os.environ["SECRET"]
 print(json.dumps(c, indent=2))
 PY
-      chmod 600 "$TMP/config.json"
-      pct push "$CTID" "$TMP/config.json" /var/lib/aether-homelab/config.json
-      pct exec "$CTID" -- sh -c 'chown aether:aether /var/lib/aether-homelab/config.json && chmod 600 /var/lib/aether-homelab/config.json && systemctl restart aether-homelab'
-      say "New token in place; the old one no longer works."
-      exit 0 ;;
-    *) exit 0 ;;
-  esac
+        chmod 600 "$TMP/config.json"
+        pct push "$CTID" "$TMP/config.json" /var/lib/aether-homelab/config.json
+        pct exec "$CTID" -- sh -c 'chown aether:aether /var/lib/aether-homelab/config.json && chmod 600 /var/lib/aether-homelab/config.json && systemctl restart aether-homelab'
+        say "New token in place; the old one no longer works."
+        exit 0 ;;
+      *) exit 0 ;;
+    esac
+  fi
+
+  # The container exists but an earlier run stopped part-way through.
+  echo
+  warn "An earlier install didn't finish (container ${b}$CTID${n}). It can be finished now."
+  echo "   (Your settings from last time - ID, storage, IP - are kept.)"
+  ask_auto
+  yes_ "$(ask "Finish installing into container $CTID? (y/n)" "y")" || die "cancelled - nothing was changed"
+  BRIDGE="$(pct config "$CTID" | sed -n 's/^net0:.*bridge=\([^,]*\).*/\1/p')"
+  HOST_IP="$(bridge_ip "${BRIDGE:-vmbr0}")"
+  [ -n "$HOST_IP" ] || die "couldn't find this host's IP on ${BRIDGE:-vmbr0}"
+  wait_net "$CTID"
+  say "Creating the locked-down Proxmox API token"
+  make_token; MADE_TOKEN=1
+  check_token
+  install_into "$CTID"
+  configure_and_start "$CTID" "$HOST_IP" "$AUTO"
+  finish "$CTID"
+  exit 0
 fi
 
 # ---------------------------------------------------------------- settings
@@ -149,6 +312,7 @@ STORAGES="$(pvesm status -content rootdir | awk 'NR>1 && $3=="active" {print $1}
 [ -n "$STORAGES" ] || die "no active storage can hold containers"
 echo "   Storage for the container disk: $(echo "$STORAGES" | tr '\n' ' ')"
 STORAGE="$(ask "Storage" "$(echo "$STORAGES" | head -n 1)")"
+echo "$STORAGES" | grep -qx "$STORAGE" || die "'$STORAGE' isn't one of: $(echo "$STORAGES" | tr '\n' ' ')"
 BRIDGE="$(ask "Network bridge" "vmbr0")"
 echo "   IP: 'dhcp', or a fixed address like 192.168.1.60/24 (fixed is better -"
 echo "       your phone saves the address)"
@@ -157,9 +321,9 @@ GW=""
 if [ "$IP" != "dhcp" ]; then
   GW="$(ask "Gateway" "$(ip route | awk '/^default/ {print $3; exit}')")"
 fi
-if yes_ "$(ask "Install updates automatically? (y/n)" "y")"; then AUTO=1; else AUTO=0; fi
+ask_auto
 
-HOST_IP="$(ip -4 -o addr show "$BRIDGE" | awk '{print $4}' | cut -d/ -f1 | head -n 1)"
+HOST_IP="$(bridge_ip "$BRIDGE")"
 [ -n "$HOST_IP" ] || die "couldn't find this host's IP on $BRIDGE"
 
 echo
@@ -198,84 +362,14 @@ pct create "$CTID" "$TSTORE:vztmpl/$TPL" \
   -cores 1 -memory 512 -swap 256 -rootfs "$STORAGE:4" \
   -net0 "$NET" -onboot 1 -tags "$CT_TAG" \
   -description "Aether Homelab add-on - github.com/$REPO" >/dev/null
+MADE_CT="$CTID"
 pct start "$CTID"
+wait_net "$CTID"
 
-say "Waiting for the container's network"
-for _ in $(seq 1 60); do
-  pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1 && break
-  sleep 1
-done
-pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1 \
-  || die "container $CTID has no network - check the bridge/IP and re-run"
-
-# -------------------------------------------------------------- the token
 say "Creating the locked-down Proxmox API token"
-make_token
+make_token; MADE_TOKEN=1
 check_token
 
-# -------------------------------------------------- install inside the CT
-say "Installing the add-on inside the container"
-cat > "$TMP/setup.sh" <<'SETUP'
-#!/bin/bash
-set -euo pipefail
-REF="$1"; REPO="$2"; CODELOAD="$3"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq python3 python3-cryptography curl ca-certificates qrencode >/dev/null
-id aether >/dev/null 2>&1 || useradd --system --home-dir /var/lib/aether-homelab \
-  --shell /usr/sbin/nologin aether
-install -d -o aether -g aether -m 755 /opt/aether-homelab
-install -d -o aether -g aether -m 700 /var/lib/aether-homelab
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-curl -fsSL "$CODELOAD/$REPO/tar.gz/$REF" | tar xz -C "$work"
-src="$(find "$work" -maxdepth 3 -type d -path '*/add-ons/homelab' | head -n 1)"
-[ -n "$src" ] && [ -f "$src/server.py" ] || { echo "download looks wrong"; exit 1; }
-rm -rf /opt/aether-homelab/app
-cp -a "$src" /opt/aether-homelab/app
-chown -R aether:aether /opt/aether-homelab
-install -m 644 /opt/aether-homelab/app/aether-homelab.service /etc/systemd/system/aether-homelab.service
-cat > /usr/local/bin/update <<'W'
-#!/bin/sh
-# Update the Aether homelab add-on to the newest release.
-exec runuser -u aether -- env AETHER_HL_DATA=/var/lib/aether-homelab \
-  /bin/sh /opt/aether-homelab/app/update.sh "$@"
-W
-cat > /usr/local/bin/aether-homelab <<'W'
-#!/bin/sh
-umask 077
-cd /opt/aether-homelab/app
-exec runuser -u aether -- env AETHER_HL_DATA=/var/lib/aether-homelab \
-  python3 /opt/aether-homelab/app/cli.py "$@"
-W
-chmod 755 /usr/local/bin/update /usr/local/bin/aether-homelab
-systemctl daemon-reload
-systemctl enable -q aether-homelab
-SETUP
-pct push "$CTID" "$TMP/setup.sh" /root/aether-setup.sh
-pct exec "$CTID" -- bash /root/aether-setup.sh "$REF" "$REPO" "$CODELOAD"
-pct exec "$CTID" -- rm -f /root/aether-setup.sh
-
-write_config "$TMP/config.json" "$HOST_IP" "$AUTO"
-pct push "$CTID" "$TMP/config.json" /var/lib/aether-homelab/config.json
-pct exec "$CTID" -- sh -c 'chown aether:aether /var/lib/aether-homelab/config.json && chmod 600 /var/lib/aether-homelab/config.json'
-pct exec "$CTID" -- systemctl start aether-homelab
-
-say "Starting the add-on"
-for _ in $(seq 1 30); do
-  pct exec "$CTID" -- curl -fsS http://127.0.0.1:8788/ping >/dev/null 2>&1 && break
-  sleep 1
-done
-pct exec "$CTID" -- curl -fsS http://127.0.0.1:8788/ping >/dev/null 2>&1 \
-  || die "the add-on didn't start - see: pct exec $CTID -- journalctl -u aether-homelab"
-
-CT_IP="$(pct exec "$CTID" -- hostname -I | awk '{print $1}')"
-
-# ----------------------------------------------------------------- done
-pct exec "$CTID" -- /usr/local/bin/aether-homelab code
-echo
-say "${b}Installed.${n}"
-echo "   Open on your phone:   ${b}http://$CT_IP:8788${n}"
-echo "   In Aether Remote, add it to your PC switcher with that address."
-echo "   Inside the container: 'update' gets the newest version,"
-echo "                         'aether-homelab status' shows how it's doing."
-echo "   Run this installer again any time to update it or replace its token."
+install_into "$CTID"
+configure_and_start "$CTID" "$HOST_IP" "$AUTO"
+finish "$CTID"

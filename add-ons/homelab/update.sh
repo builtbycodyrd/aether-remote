@@ -44,7 +44,12 @@ say "updating $CUR -> $TAG"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-curl -fsSL "$CODELOAD/$REPO/tar.gz/refs/tags/$TAG" | tar xz -C "$work"
+# Retries ride out a flaky DNS server or a dropped connection.
+if ! curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors \
+     -o "$work/src.tgz" "$CODELOAD/$REPO/tar.gz/refs/tags/$TAG"; then
+  say "couldn't download $TAG from GitHub - nothing changed"; exit 1
+fi
+tar xzf "$work/src.tgz" -C "$work"
 src="$(find "$work" -maxdepth 3 -type d -path '*/add-ons/homelab' | head -n 1)"
 if [ -z "$src" ] || [ ! -f "$src/server.py" ]; then
   say "the download doesn't look right - nothing changed"; exit 1
