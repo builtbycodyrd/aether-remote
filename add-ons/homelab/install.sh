@@ -164,8 +164,20 @@ install_into() {   # $1 = CTID - push the downloaded add-on in and set it up
 set -euo pipefail
 # A fresh container has no locales; without this apt and perl complain loudly.
 export LC_ALL=C.UTF-8 LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none
-apt-get update -qq
-apt-get install -y -qq python3 python3-cryptography curl ca-certificates qrencode >/dev/null
+# Mirrors hiccup (one mid-sync hands out a package list whose files are
+# already gone), and a container often has no IPv6 route - so IPv4 only,
+# apt's own retries, and a few full rounds before giving up.
+APT=(-o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o APT::Update::Error-Mode=any)
+ok=""
+for round in 1 2 3 4; do
+  if apt-get "${APT[@]}" update -qq && \
+     apt-get "${APT[@]}" install -y -qq python3 curl ca-certificates qrencode >/dev/null; then
+    ok=1; break
+  fi
+  echo "   (package download failed - retrying in $((round * 10))s)"
+  sleep $((round * 10))
+done
+[ -n "$ok" ] || { echo "couldn't download Debian packages - is deb.debian.org reachable?"; exit 1; }
 id aether >/dev/null 2>&1 || useradd --system --home-dir /var/lib/aether-homelab \
   --shell /usr/sbin/nologin aether
 install -d -o aether -g aether -m 755 /opt/aether-homelab
@@ -325,6 +337,12 @@ ask_auto
 
 HOST_IP="$(bridge_ip "$BRIDGE")"
 [ -n "$HOST_IP" ] || die "couldn't find this host's IP on $BRIDGE"
+if [ "$IP" != "dhcp" ]; then
+  # Two devices on one address = a flaky network for both. Check first.
+  if ping -c 2 -W 1 "${IP%/*}" >/dev/null 2>&1; then
+    die "${IP%/*} is already used by another device on your network - pick a free address"
+  fi
+fi
 
 echo
 echo "   Container $CTID '$HN' on $STORAGE, $BRIDGE, IP $IP, 1 core / 512 MB / 4 GB"
