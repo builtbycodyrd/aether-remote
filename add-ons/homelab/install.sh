@@ -242,8 +242,10 @@ finish() {   # $1 = CTID
   echo "   Open on your phone:   ${b}http://$CT_IP:8788${n}"
   echo "   Settings (computer):  ${b}http://$CT_IP:8788/manage${n}"
   echo "   In Aether Remote, add it to your PC switcher as ${b}$CT_IP:8788${n}."
-  echo "   Inside the container: 'update' gets the newest version,"
-  echo "                         'aether-homelab status' shows how it's doing."
+  echo "   The container has no password on purpose. From this Proxmox shell:"
+  echo "     ${b}pct exec $1 -- update${n}                 newest version"
+  echo "     ${b}pct exec $1 -- aether-homelab status${n}  how it's doing"
+  echo "     ${b}pct enter $1${n}                          a root shell inside it"
   echo "   Run this installer again any time to update it or replace its token."
 }
 

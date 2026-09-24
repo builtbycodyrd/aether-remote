@@ -1,3 +1,10 @@
+# 0.3.1
+
+- The add-on's container has no password on purpose, so its Console tab's
+  login prompt is a dead end. The installer, the manage page and the README
+  now say how to reach it instead: from the Proxmox host shell,
+  `pct exec <ID> -- update` (or `pct enter <ID>` for a shell inside it).
+
 # 0.3.0
 
 **The same app as your PC - with homelab tiles.** The add-on now runs the

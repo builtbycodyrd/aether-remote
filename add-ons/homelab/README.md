@@ -53,10 +53,10 @@ Remote, add that address to your PC switcher.
 
 Same idea as the PC app:
 
-- A banner appears in the add-on when a new version is out — **More info** shows
-  what changed, **Update** installs it, **✕** hides that version.
-- If you said yes to automatic updates during install, it updates itself daily.
-- Or type **`update`** in the container's console.
+- The manage page (`http://<address>:8788/manage`) shows when a new version is
+  out, with **Update now** and the automatic-updates switch.
+- If automatic updates are on, it updates itself daily.
+- Or from the Proxmox host shell: **`pct exec <ID> -- update`**.
 
 An update that doesn't start cleanly is rolled back to the version you had.
 Your login and settings are never touched by an update.
@@ -65,6 +65,11 @@ Running the installer again finds the existing container and offers to update
 it, or to replace its Proxmox token (use that if you ever think it leaked).
 
 ## Commands inside the container
+
+The container has **no password** on purpose, so its Console tab's login
+prompt is a dead end. Run these from the **Proxmox host shell** instead, as
+`pct exec <ID> -- <command>` (e.g. `pct exec 117 -- update`), or open a root
+shell inside it with `pct enter <ID>`. Not sure of the ID? `pct list`.
 
 | Command | What it does |
 |---|---|

@@ -143,9 +143,11 @@
       <button class="danger" id="signout">Sign out every phone</button>
       <div class="msg" id="secMsg"></div>
     </div>
-    <p class="hint" style="margin:12px 0 0">Forgot the PIN? In the container's console:
-      <code>aether-homelab reset-pin</code>. New phone? <code>aether-homelab code</code>
-      shows the login QR again. There's no way to do either over the network, on purpose.</p>
+    <p class="hint" style="margin:12px 0 0">Forgot the PIN? In the Proxmox host shell:
+      <code>pct exec &lt;ID&gt; -- aether-homelab reset-pin</code>. New phone?
+      <code>pct exec &lt;ID&gt; -- aether-homelab code</code> shows the login QR again
+      (<code>pct list</code> shows the ID). There's no way to do either over the network,
+      on purpose - and the container itself has no password.</p>
   </div>
 </div>
 
