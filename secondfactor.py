@@ -128,6 +128,9 @@ class SecondFactor:
         with self.lock:
             self.st["pin"] = {"salt": _b64(salt), "hash": _b64(self._hash(pin, salt))}
             self.st["method"] = "pin"
+            # One method at a time: the old passkeys are forgotten, so a lost
+            # phone's passkey can't quietly start working again later.
+            self.st["passkeys"] = []
             self.st["fails"] = 0
             self.st["locked_until"] = 0
             self._save()

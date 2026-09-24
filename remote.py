@@ -43,6 +43,20 @@ import update   # noqa: E402
 import wol      # noqa: E402
 import tls      # noqa: E402
 import ssl      # noqa: E402
+import secondfactor   # noqa: E402
+
+# Tests only: treat EVERY request as coming from a phone, so a browser on this
+# PC can exercise the Face ID / PIN lock. It can only make the server stricter
+# (it removes the at-the-PC exemption, never adds access), and it is ignored
+# unless the data folder has been pointed at a throwaway one.
+_AS_PHONE = (os.environ.get("AETHER_TEST_AS_PHONE") == "1"
+             and bool(os.environ.get("AETHER_DATA")))
+
+# Face ID / PIN on top of the session. Keyed off the session-signing key, so
+# "sign out every phone" also voids every unlock and step-up token.
+SF = secondfactor.SecondFactor(paths.data("sf.json"),
+                               lambda: auth.STATE["server_key"],
+                               log=lambda m: log(m))
 
 
 # The scan takes ~1.3s, so cache it and refresh on demand rather than on
@@ -206,11 +220,53 @@ class Handler(BaseHTTPRequestHandler):
         token is gone - TOTP replaced it."""
         return auth.valid_session(self._cookie("rs"))
 
+    # -- second factor (Face ID / PIN) ------------------------------------
+    def _unlocked(self):
+        """Past the second factor? The PC itself never needs it - being at the
+        machine is stronger than anything a phone can prove - and with no
+        second factor set up there is nothing to pass."""
+        if self._is_local() or not SF.enabled():
+            return True
+        return SF.valid_unlock(self._cookie("ru"), self._cookie("rs"))
+
+    def _rp(self):
+        """(rpId, origin) for passkeys, or (None, None) without HTTPS - a
+        passkey is only possible on a secure, named origin."""
+        base = getattr(self.server, "https_base", None)
+        if not base:
+            return None, None
+        return urlparse(base).hostname, base
+
+    def _stepup(self, scope, b):
+        """For a protected command. Returns None when it may run; otherwise
+        sends the reply that makes the app ask for Face ID / PIN and returns
+        True. The app then retries the SAME request with the one-time token,
+        so every path to a protected command goes through here."""
+        if self._is_local():
+            return None
+        if not SF.enabled():
+            self._send(403, {"error": "stepup", "scope": scope, "setup": True})
+            return True
+        if SF.use_stepup(b.get("stepup"), scope, self._cookie("rs")):
+            log("step-up ok: %s (from %s)" % (scope, self._client_ip()))
+            return None
+        self._send(403, {"error": "stepup", "scope": scope, "setup": False})
+        return True
+
+    def _unlock_cookie(self, clear=False):
+        if clear:
+            return "ru=; Path=/; Max-Age=0; SameSite=Strict; HttpOnly"
+        return ("ru=%s; Path=/; Max-Age=%d; SameSite=Strict; HttpOnly%s"
+                % (SF.make_unlock(self._cookie("rs")), secondfactor.UNLOCK_TTL,
+                   "; Secure" if self._secure() else ""))
+
     def _client_ip(self):
         return self.client_address[0] if self.client_address else "?"
 
     def _is_local(self):
         """Is this request from the PC itself, rather than over the network?"""
+        if _AS_PHONE:
+            return False
         ip = self._client_ip()
         if ip in ("127.0.0.1", "::1", "localhost"):
             return True
@@ -359,15 +415,31 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    MAX_BODY = 1 << 20      # every request body is small JSON
+
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if not n:
-            return {}
-        raw = self.rfile.read(n)
+        """The request's JSON body, read from the socket exactly once.
+
+        It must be read even when the request is refused: the connection is
+        kept alive, and unread body bytes would be parsed as the start of the
+        NEXT request (which then fails with a baffling 501)."""
+        if hasattr(self, "_parsed_body"):
+            return self._parsed_body
+        self._parsed_body = {}
         try:
-            return json.loads(raw.decode("utf-8"))
-        except Exception:
-            return {}
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0 or n > self.MAX_BODY:
+            self.close_connection = True     # can't skip it safely - hang up
+            return self._parsed_body
+        if n:
+            raw = self.rfile.read(n)
+            try:
+                self._parsed_body = json.loads(raw.decode("utf-8"))
+            except Exception:
+                pass
+        return self._parsed_body
 
     # -- updates -----------------------------------------------------------
     def _update_install(self):
@@ -468,6 +540,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(302, b"", "text/html",
                                   {"Location": "/login"})
             return self._send(401, {"error": "not logged in"})
+
+        if path == "/api/sf/status":
+            rp_id, _ = self._rp()
+            st = SF.status()
+            st.update({"unlocked": self._unlocked(), "local": self._is_local(),
+                       "passkeys_possible": bool(rp_id)})
+            return self._send(200, st)
+
+        # Past the session, the second factor: the app's pages load (so it can
+        # show its own lock screen), but its data and controls do not.
+        if path.startswith("/api/") and not self._unlocked():
+            return self._send(403, {"error": "locked"})
 
         try:
             if path == "/":
@@ -587,6 +671,11 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
+        # One handler object serves every request on a kept-alive connection,
+        # so forget the previous request's body, then drain this one now - a
+        # refusal below must not leave bytes behind to desync the next request.
+        self.__dict__.pop("_parsed_body", None)
+        self._body()
 
         # The wizard posts before any session exists - same two guards as the
         # GET side: only while setup is unfinished, and only from the PC.
@@ -614,6 +703,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authed():
             return self._send(401, {"error": "not logged in"})
+
+        if path.startswith("/api/sf/"):
+            try:
+                return self._sf_post(path, self._body())
+            except Exception as e:
+                log("sf %s failed: %s" % (path, e))
+                return self._send(400, {"error": str(e)})
+
+        if path != "/api/logout" and not self._unlocked():
+            return self._send(403, {"error": "locked"})
 
         try:
             b = self._body()
@@ -726,6 +825,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/security":
                 act = str(b.get("action", ""))
+                # Signing everyone out or replacing the authenticator secret
+                # from a phone needs Face ID / PIN; at the PC it's free.
+                if act in ("revoke", "reset") and self._stepup("security", b):
+                    return
                 if act == "revoke":
                     auth.revoke_all()
                     log("all sessions revoked")
@@ -831,6 +934,113 @@ class Handler(BaseHTTPRequestHandler):
         log("stream closed after %d frames" % n)
         self.close_connection = True
 
+    # -- second factor routes ---------------------------------------------
+    def _sf_post(self, path, b):
+        rs = self._cookie("rs")
+        rp_id, origin = self._rp()
+        purpose = str(b.get("purpose", ""))
+        scope = str(b.get("scope", ""))[:80]
+
+        def settings_ok():
+            """Changing or turning off the second factor needs the CURRENT one
+            (or being at the PC). First-time setup needs only the session."""
+            return (not SF.enabled() or self._is_local()
+                    or SF.use_stepup(b.get("stepup"), "settings", rs))
+
+        if path == "/api/sf/options":
+            if not rp_id:
+                return self._send(400, {"error": "Face ID needs the secure "
+                                        "(https) address of this PC."})
+            if purpose == "register":
+                ch = SF.challenge("register")
+                import base64 as _b
+                u = _b.urlsafe_b64encode(("aether-" + auth.ACCOUNT).encode()).decode().rstrip("=")
+                return self._send(200, {"publicKey": {
+                    "challenge": secondfactor._b64(ch),
+                    "rp": {"id": rp_id, "name": "Aether Remote"},
+                    "user": {"id": u, "name": auth.ACCOUNT,
+                             "displayName": "Aether Remote - " + auth.ACCOUNT},
+                    "pubKeyCredParams": [{"type": "public-key", "alg": -7},
+                                         {"type": "public-key", "alg": -257}],
+                    "authenticatorSelection": {"userVerification": "required",
+                                               "residentKey": "preferred"},
+                    "excludeCredentials": [{"type": "public-key", "id": i}
+                                           for i in SF.allow_ids()],
+                    "attestation": "none", "timeout": 60000}})
+            if purpose in ("unlock", "stepup"):
+                ch = SF.challenge(purpose, scope if purpose == "stepup" else "")
+                return self._send(200, {"publicKey": {
+                    "challenge": secondfactor._b64(ch), "rpId": rp_id,
+                    "allowCredentials": [{"type": "public-key", "id": i}
+                                         for i in SF.allow_ids()],
+                    "userVerification": "required", "timeout": 60000}})
+            return self._send(400, {"error": "unknown purpose"})
+
+        if path == "/api/sf/verify":
+            if purpose not in ("unlock", "stepup"):
+                return self._send(400, {"error": "unknown purpose"})
+            if not SF.enabled():
+                return self._send(400, {"error": "Face ID / PIN is not set up"})
+            if SF.st.get("method") == "pin":
+                good, msg = SF.check_pin(b.get("pin"))
+            else:
+                if not rp_id:
+                    return self._send(400, {"error": "Face ID needs the secure address"})
+                good, msg = SF.check_passkey(b.get("credential") or {}, rp_id, origin,
+                                             purpose, scope if purpose == "stepup" else "")
+            if not good:
+                log("second factor failed from %s: %s" % (self._client_ip(), msg))
+                # 400, not 401: the app reads 401 as "signed out" and would
+                # bounce to the login page over a mistyped PIN.
+                return self._send(400, {"error": msg, "sf_failed": True,
+                                        **SF.status()})
+            out = {"ok": True}
+            if purpose == "stepup":
+                out["stepup"] = SF.make_stepup(scope, rs)
+            return self._send(200, out, extra={"Set-Cookie": self._unlock_cookie()})
+
+        if path == "/api/sf/pin":
+            if not settings_ok():
+                return self._send(403, {"error": "stepup", "scope": "settings",
+                                        "setup": False})
+            SF.set_pin(str(b.get("pin", "")))
+            log("PIN set (from %s)" % self._client_ip())
+            return self._send(200, {"ok": True, **SF.status()},
+                              extra={"Set-Cookie": self._unlock_cookie()})
+
+        if path == "/api/sf/register":
+            if not rp_id:
+                return self._send(400, {"error": "Face ID needs the secure address"})
+            if not settings_ok():
+                return self._send(403, {"error": "stepup", "scope": "settings",
+                                        "setup": False})
+            SF.register_passkey(b.get("credential") or {}, rp_id, origin,
+                                str(b.get("label", "")))
+            return self._send(200, {"ok": True, **SF.status()},
+                              extra={"Set-Cookie": self._unlock_cookie()})
+
+        if path == "/api/sf/lock":
+            return self._send(200, {"ok": True},
+                              extra={"Set-Cookie": self._unlock_cookie(clear=True)})
+
+        if path == "/api/sf/disable":
+            if not settings_ok():
+                return self._send(403, {"error": "stepup", "scope": "settings",
+                                        "setup": False})
+            SF.reset()
+            return self._send(200, {"ok": True, **SF.status()},
+                              extra={"Set-Cookie": self._unlock_cookie(clear=True)})
+
+        if path == "/api/sf/reset":
+            # The recovery path for a lost phone or a forgotten PIN: only from
+            # the PC itself.
+            if not self._is_local():
+                return self._send(403, {"error": "reset it from the PC itself"})
+            SF.reset()
+            return self._send(200, {"ok": True, **SF.status()})
+
+        return self._send(404, {"error": "no such path"})
+
     # -- power ------------------------------------------------------------
     POWER = {
         "sleep":    "rundll32.exe powrprof.dll,SetSuspendState 0,1,0",
@@ -852,6 +1062,9 @@ class Handler(BaseHTTPRequestHandler):
         if action in self.DESTRUCTIVE and not b.get("confirm"):
             return self._send(409, {"error": "needs confirm",
                                     "confirm": True, "action": action})
+        # ...and then Face ID / PIN, checked here on the server, every time.
+        if action in self.DESTRUCTIVE and self._stepup("power." + action, b):
+            return
 
         if action == "lock":
             sysctl.lock_workstation()
@@ -877,6 +1090,9 @@ class Handler(BaseHTTPRequestHandler):
             # the phone's payload - then run them and launch, off-thread so a
             # Wait step doesn't hold the request open.
             actions = self._tile_actions(str(b.get("id", "")))
+            if self._protected_steps(actions) and \
+                    self._stepup("tile:" + str(b.get("id", "")), b):
+                return
             if actions:
                 def _pre():
                     self._run_steps(actions, "launch %s" % ref)
@@ -898,7 +1114,8 @@ class Handler(BaseHTTPRequestHandler):
                 sysctl.screen_off()
             elif spec["kind"] == "power":
                 return self._power({"action": ref.split(".", 1)[1],
-                                    "confirm": b.get("confirm")})
+                                    "confirm": b.get("confirm"),
+                                    "stepup": b.get("stepup")})
             return self._send(200, {"ok": True})
 
         if kind == "toggle":
@@ -921,7 +1138,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self._state())
 
         if kind == "scene":
-            return self._scene({"run": ref})
+            return self._scene({"run": ref, "stepup": b.get("stepup")})
 
         return self._send(400, {"error": "unknown tile kind"})
 
@@ -957,6 +1174,11 @@ class Handler(BaseHTTPRequestHandler):
                           if s["id"] == b["run"]), None)
             if not scene:
                 return self._send(404, {"error": "no such scene"})
+            # A scene that shuts down / restarts / signs out needs the same
+            # Face ID / PIN as the tile itself - no side door.
+            if self._protected_steps(scene.get("steps")) and \
+                    self._stepup("scene:" + scene["id"], b):
+                return
             # Run it off-thread so a Wait step does not hold the request open.
             threading.Thread(target=self._run_scene, args=(scene,),
                              daemon=True).start()
@@ -978,6 +1200,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _run_scene(self, scene):
         self._run_steps(scene.get("steps", []), scene.get("name"))
+
+    @classmethod
+    def _protected_steps(cls, steps):
+        """Does this list of steps shut down, restart or sign out?"""
+        return any(s.get("op") == "power" and str(s.get("value")) in cls.DESTRUCTIVE
+                   for s in (steps or []))
 
     def _run_steps(self, steps, name=""):
         """Execute a list of steps in order. Used by scenes AND by a tile's

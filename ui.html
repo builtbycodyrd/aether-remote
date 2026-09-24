@@ -388,6 +388,29 @@
 
   #fab{position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom) + 18px);
     z-index:25;display:flex;gap:9px}
+
+  /* Face ID / PIN lock. Id-level [hidden] rules on purpose: a class-level
+     display rule once beat the hide on the update bar and it could never be
+     hidden. These can't lose that fight. */
+  #sfLock{position:fixed;inset:0;z-index:400;display:flex;align-items:center;
+    justify-content:center;padding:24px;
+    background:color-mix(in srgb,var(--bg) 88%,transparent);
+    -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+  #sfLock[hidden], #sfLock [hidden]{display:none !important}
+  #sfLock .card{width:100%;max-width:340px;text-align:center;border-radius:24px;
+    padding:28px 22px 22px;border:1px solid var(--line2);
+    background:color-mix(in srgb,var(--primary) 10%,color-mix(in srgb,var(--bg) 92%,#000));
+    box-shadow:0 24px 60px rgba(0,0,0,.6)}
+  #sfLock .glyph{width:54px;height:54px;margin:0 auto 12px;border-radius:16px;
+    display:flex;align-items:center;justify-content:center;
+    background:color-mix(in srgb,var(--secondary) 16%,transparent);color:var(--accent2)}
+  #sfTitle{font-size:18px;font-weight:650;margin:0 0 5px}
+  #sfSub{font-size:13px;color:var(--muted);margin:0 0 16px;line-height:1.5}
+  #sfPin{width:100%;font-size:24px;text-align:center;letter-spacing:7px;
+    padding:12px;border-radius:14px;border:1px solid var(--line2);
+    background:rgba(0,0,0,.28);color:var(--text)}
+  #sfErr{color:var(--bad);font-size:12.5px;min-height:17px;margin-top:10px}
+  #sfLock .btn{width:100%;justify-content:center;margin-top:12px}
 </style>
 </head>
 <body class="glass">
@@ -439,6 +462,26 @@
 </div>
 
 <div id="toast"></div>
+
+<div id="sfLock" hidden role="dialog" aria-modal="true" aria-labelledby="sfTitle">
+  <div class="card">
+    <div class="glyph">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/>
+        <path d="M9 10v1M15 10v1M12 10v3.5h-1"/><path d="M9.5 16a3.5 3.5 0 0 0 5 0"/></svg>
+    </div>
+    <div id="sfTitle">Aether Remote is locked</div>
+    <div id="sfSub"></div>
+    <div id="sfPinRow">
+      <input id="sfPin" type="password" inputmode="numeric" pattern="[0-9]*"
+             autocomplete="current-password" maxlength="12" placeholder="PIN">
+    </div>
+    <button class="btn pri" id="sfGo">Unlock</button>
+    <button class="btn" id="sfCancel">Cancel</button>
+    <div id="sfErr"></div>
+  </div>
+</div>
 
 <!-- The full-screen desktop. Built once and reused rather than created per
      open, so the <img> keeps its decoder warm between sessions. -->

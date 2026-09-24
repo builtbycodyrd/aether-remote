@@ -642,6 +642,24 @@ function viewSettings(){
     </div>
 
     <div class="card">
+      <h3>Face ID &amp; PIN</h3>
+      <div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:12px">
+        A second lock on top of the 30-day sign-in: phones pass Face ID (or a
+        PIN) every time they open the app, and again for every shut down,
+        restart or sign out. It's set up from the phone. This PC never needs it -
+        being at the machine already counts.
+      </div>
+      <label class="row"><div class="t">Status
+        <div class="d" id="sfState">Checking…</div></div>
+        <button class="btn sm danger" id="sfReset">Reset</button></label>
+      <div class="muted" style="font-size:11.5px;line-height:1.55;margin-top:8px">
+        Lost your phone or forgot the PIN? Reset turns it off; the next power
+        command on a phone asks you to set it up again. Reset only works here,
+        on this PC.
+      </div>
+    </div>
+
+    <div class="card">
       <h3>Wake on LAN</h3>
       <div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:12px">
         Let your phone turn this PC on when it's asleep or off. The phone can't
@@ -704,6 +722,26 @@ function viewSettings(){
     $('#port').value = s.port;
     $('#autostart').checked = !!s.autostart;
     $('#autoNote').textContent = s.autostartDetail || '';
+  });
+
+  // ---- Face ID & PIN ----
+  const sfPaint = s => {
+    const el = $('#sfState');
+    if (!el) return;
+    el.textContent = !s.enabled ? 'Off'
+      : s.method === 'pin' ? 'On - PIN'
+      : 'On - Face ID (' + s.passkeys + ' device' + (s.passkeys === 1 ? '' : 's') + ')';
+    if (s.locked_for) el.textContent += ' - locked after wrong tries (' +
+      Math.ceil(s.locked_for / 60) + ' min)';
+    $('#sfReset').disabled = !s.enabled && !s.locked_for;
+  };
+  api('/api/sf/status').then(sfPaint).catch(() => {
+    const el = $('#sfState'); if (el) el.textContent = 'Could not read it.';
+  });
+  $('#sfReset').addEventListener('click', async () => {
+    if (!confirm('Turn off Face ID / PIN? Phones will be asked to set it up again the next time they shut down, restart or sign out.')) return;
+    try { sfPaint(await api('/api/sf/reset', {})); toast('Face ID / PIN turned off'); }
+    catch (e) { toast(e.message); }
   });
 
   // ---- Wake on LAN ----

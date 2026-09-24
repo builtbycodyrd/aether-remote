@@ -35,7 +35,12 @@ if os.path.isdir(static):
 hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
-    "update", "wol", "tls",
+    "update", "wol", "tls", "secondfactor", "webauthn",
+    # passkey (Face ID) signature checks
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    "cryptography.hazmat.primitives.asymmetric.rsa",
+    "cryptography.hazmat.primitives.asymmetric.padding",
+    "cryptography.hazmat.primitives.serialization",
     "qrcode", "qrcode.image.pil", "PIL", "PIL.Image",
 ]
 

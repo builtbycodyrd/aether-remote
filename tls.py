@@ -176,7 +176,10 @@ def redirect_handler(base_handler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            # 308 keeps the method, so a POST is re-sent as a POST.
+            # 308 keeps the method, so a POST is re-sent as a POST. Its body is
+            # never read here, so hang up after answering rather than let those
+            # bytes be parsed as the next request on this connection.
+            self.close_connection = True
             self.send_response(308 if self.command not in ("GET", "HEAD") else 301)
             self.send_header("Location", self.server.https_base + self.path)
             self.send_header("Content-Length", "0")

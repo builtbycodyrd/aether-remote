@@ -240,7 +240,7 @@ Add-ons are versioned separately from the Windows app (tags like
 ```bash
 git clone https://github.com/builtbycodyrd/aether-remote.git
 cd aether-remote
-pip install pillow qrcode
+pip install pillow qrcode cryptography
 
 python launch.py --server        # the HTTP server
 python launch.py                 # the tray app

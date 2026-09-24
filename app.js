@@ -30,14 +30,257 @@ function esc(x){
     c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
-async function api(path, body, method){
+async function api(path, body, method, _tries){
   const o = { method: method || (body ? 'POST' : 'GET'), headers:{} };
   if (body){ o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body); }
   const r = await fetch(path, o);
   if (r.status === 401){ location.href = '/login'; throw new Error('logged out'); }
   const j = await r.json().catch(() => ({}));
+  const tries = _tries || 0;
+  // The server wants the second factor. Every protected call goes through
+  // here, so no button has to know about Face ID / PIN on its own.
+  if (r.status === 403 && tries < 2 && j.error === 'locked'){
+    await sfUnlock();
+    return api(path, body, method, tries + 1);
+  }
+  if (r.status === 403 && tries < 2 && j.error === 'stepup'){
+    if (j.setup) await sfSetup('first');
+    const token = await sfStepUp(j.scope);
+    return api(path, { ...(body || {}), stepup: token }, method, tries + 1);
+  }
   if (!r.ok){ const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; throw e; }
   return j;
+}
+
+/* ================ second factor: Face ID or a PIN ================
+ * Opening the app asks for it; so does shut down / restart / sign out, every
+ * time. The SERVER enforces both - this is only the part you see. Face ID is
+ * a passkey (WebAuthn), which needs the https address; a PIN works anywhere.
+ */
+const SFX = { st: null, unlocking: null };
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')
+  + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)).buffer;
+
+async function sfStatus(){
+  const r = await fetch('/api/sf/status', { cache: 'no-store' });
+  if (r.status === 401){ location.href = '/login'; throw new Error('logged out'); }
+  SFX.st = await r.json();
+  return SFX.st;
+}
+
+async function sfPost(path, body){
+  const r = await fetch(path, { method: 'POST', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok){ const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; throw e; }
+  return j;
+}
+
+function credJSON(c){
+  const out = { id: c.id, rawId: b64u(c.rawId), type: c.type, response: {} };
+  for (const k of ['clientDataJSON', 'attestationObject', 'authenticatorData',
+                   'signature', 'userHandle'])
+    if (c.response[k]) out.response[k] = b64u(c.response[k]);
+  return out;
+}
+
+async function passkeyGet(purpose, scope){
+  const { publicKey: pk } = await sfPost('/api/sf/options', { purpose, scope });
+  pk.challenge = unb64u(pk.challenge);
+  pk.allowCredentials = (pk.allowCredentials || []).map(c => ({ ...c, id: unb64u(c.id) }));
+  const c = await navigator.credentials.get({ publicKey: pk });
+  return credJSON(c);
+}
+
+async function passkeyCreate(){
+  const { publicKey: pk } = await sfPost('/api/sf/options', { purpose: 'register' });
+  pk.challenge = unb64u(pk.challenge);
+  pk.user.id = unb64u(pk.user.id);
+  pk.excludeCredentials = (pk.excludeCredentials || []).map(c => ({ ...c, id: unb64u(c.id) }));
+  const c = await navigator.credentials.create({ publicKey: pk });
+  return credJSON(c);
+}
+
+const SCOPE_TEXT = {
+  'power.shutdown': 'Shut down the PC', 'power.restart': 'Restart the PC',
+  'power.signout': 'Sign out of Windows', settings: 'Change Face ID / PIN',
+  security: 'Change security settings',
+};
+function scopeText(s){
+  if (SCOPE_TEXT[s]) return SCOPE_TEXT[s];
+  if (/^scene:/.test(s)) return 'Run a scene that powers off the PC';
+  if (/^tile:/.test(s)) return 'Launch - it powers off the PC first';
+  return 'Confirm';
+}
+
+/* The one prompt, for both unlocking and confirming a command. Resolves with
+   whatever the server gave back ({ok} or {ok, stepup}); rejects on Cancel. */
+function sfPrompt(purpose, scope){
+  return new Promise((resolve, reject) => {
+    const st = SFX.st || {};
+    const pin = st.method === 'pin';
+    const box = $('#sfLock');
+    $('#sfTitle').textContent = purpose === 'unlock' ? 'Aether Remote is locked'
+                                                      : scopeText(scope);
+    $('#sfSub').textContent = purpose === 'unlock'
+      ? (pin ? 'Enter your PIN to open it.' : 'Unlock with Face ID to open it.')
+      : (pin ? 'Enter your PIN to confirm.' : 'Confirm with Face ID.');
+    $('#sfPinRow').hidden = !pin;
+    $('#sfGo').textContent = pin ? (purpose === 'unlock' ? 'Unlock' : 'Confirm')
+                                 : (purpose === 'unlock' ? 'Unlock with Face ID'
+                                                         : 'Confirm with Face ID');
+    $('#sfCancel').hidden = purpose === 'unlock';
+    $('#sfErr').textContent = st.locked_for
+      ? 'Too many wrong tries. Try again in ' + Math.ceil(st.locked_for / 60) + ' min.' : '';
+    $('#sfPin').value = '';
+    box.hidden = false;
+    if (pin) setTimeout(() => $('#sfPin').focus(), 80);
+
+    const done = (fn, v) => { box.hidden = true; cleanup(); fn(v); };
+    const go = async () => {
+      $('#sfGo').disabled = true; $('#sfErr').textContent = '';
+      try {
+        const body = { purpose, scope };
+        if (pin) body.pin = $('#sfPin').value;
+        else body.credential = await passkeyGet(purpose, scope);
+        const res = await sfPost('/api/sf/verify', body);
+        try { sessionStorage.setItem('aether.unlocked', '1'); } catch (e) {}
+        done(resolve, res);
+      } catch (e) {
+        $('#sfErr').textContent = e.name === 'NotAllowedError'
+          ? 'Face ID was cancelled. Tap to try again.' : e.message;
+        $('#sfPin').value = '';
+        if (e.data && e.data.locked_for) SFX.st.locked_for = e.data.locked_for;
+      }
+      $('#sfGo').disabled = false;
+    };
+    const key = e => { if (e.key === 'Enter') go(); };
+    const cancel = () => done(reject, new Error('Cancelled'));
+    function cleanup(){
+      $('#sfGo').removeEventListener('click', go);
+      $('#sfCancel').removeEventListener('click', cancel);
+      $('#sfPin').removeEventListener('keydown', key);
+    }
+    $('#sfGo').addEventListener('click', go);
+    $('#sfCancel').addEventListener('click', cancel);
+    $('#sfPin').addEventListener('keydown', key);
+  });
+}
+
+/* Many calls can hit "locked" at once (the poll, a tap) - one prompt serves
+   them all. */
+async function sfUnlock(){
+  if (!SFX.unlocking){
+    SFX.unlocking = (async () => {
+      await sfStatus();
+      if (!SFX.st.enabled || SFX.st.unlocked) return;
+      await sfPrompt('unlock', '');
+    })().finally(() => { SFX.unlocking = null; });
+  }
+  return SFX.unlocking;
+}
+
+async function sfStepUp(scope){
+  await sfStatus();
+  const res = await sfPrompt('stepup', scope);
+  return res.stepup;
+}
+
+/* Opening the app always asks - a still-valid unlock from last time doesn't
+   count. A reload inside the same visit doesn't ask again. */
+async function sfOnLaunch(){
+  let st;
+  try { st = await sfStatus(); } catch (e) { return; }
+  if (!st.enabled || st.local) return;
+  let fresh = true;
+  try { fresh = !sessionStorage.getItem('aether.unlocked'); } catch (e) {}
+  if (fresh){ await sfPost('/api/sf/lock').catch(() => {}); st.unlocked = false; }
+  if (!st.unlocked) await sfUnlock();
+}
+
+/* Away for 5+ minutes -> locked again when you come back. */
+const SF_AWAY_MS = 5 * 60 * 1000;
+document.addEventListener('visibilitychange', async () => {
+  try {
+    if (document.hidden){ sessionStorage.setItem('aether.hiddenAt', String(Date.now())); return; }
+    const at = +sessionStorage.getItem('aether.hiddenAt') || 0;
+    if (!at || Date.now() - at < SF_AWAY_MS) return;
+    sessionStorage.removeItem('aether.hiddenAt');
+    if (!SFX.st || !SFX.st.enabled || SFX.st.local) return;
+    sessionStorage.removeItem('aether.unlocked');
+    await sfPost('/api/sf/lock').catch(() => {});
+    await sfUnlock();
+  } catch (e) {}
+});
+
+/* Setting it up (or changing it). `why` = 'first' when a power command
+   needs it and nothing is set up yet. */
+function sfSetup(why){
+  return new Promise(async (resolve, reject) => {
+    let st;
+    try { st = await sfStatus(); } catch (e) { return reject(e); }
+    const canFace = st.passkeys_possible && !!window.PublicKeyCredential;
+    openSheet(why === 'first' ? 'Protect power commands' : 'Face ID & PIN', `
+      <div style="font-size:13px;color:var(--muted);line-height:1.55;margin:12px 0 14px">
+        ${why === 'first'
+          ? 'Shut down, restart and sign out need Face ID or a PIN every time. Pick one - it also locks the app each time you open it.'
+          : 'Asked when you open the app, and for every shut down, restart or sign out.'}
+      </div>
+      ${canFace ? `<div class="btn wide pri" id="sfUseFace">Use Face ID</div>` :
+        `<div style="font-size:11.5px;color:var(--muted);margin-bottom:10px">Face ID needs
+          this PC's secure address (Tailscale with HTTPS). A PIN works here.</div>`}
+      <div style="margin-top:12px">
+        <div class="t" style="margin-bottom:7px">${canFace ? 'Or use a PIN' : 'Choose a PIN'}</div>
+        <input class="field" id="sfNewPin" type="password" inputmode="numeric"
+               autocomplete="new-password" maxlength="12" placeholder="4 to 12 digits">
+        <input class="field" id="sfNewPin2" type="password" inputmode="numeric"
+               autocomplete="new-password" maxlength="12" placeholder="Same PIN again"
+               style="margin-top:8px">
+        <div class="btn wide" id="sfUsePin" style="margin-top:9px">Use this PIN</div>
+      </div>
+      ${st.enabled && why !== 'first' ? `<div class="btn wide" id="sfOff"
+          style="margin-top:18px;color:var(--bad)">Turn off Face ID / PIN</div>` : ''}
+      <div id="sfSetErr" style="color:var(--bad);font-size:12px;min-height:16px;margin-top:9px"></div>`,
+      `<button class="btn" id="sheetClose">Cancel</button>`);
+
+    const err = m => { const el = $('#sfSetErr'); if (el) el.textContent = m; };
+    // Changing an existing one needs the current Face ID / PIN first.
+    const proof = async () => st.enabled ? { stepup: await sfStepUp('settings') } : {};
+    const finish = async () => {
+      try { sessionStorage.setItem('aether.unlocked', '1'); } catch (e) {}
+      await sfStatus(); closeSheet(); toast('Saved'); resolve();
+    };
+
+    const face = $('#sfUseFace');
+    if (face) face.addEventListener('click', async () => {
+      try {
+        const p = await proof();
+        const credential = await passkeyCreate();
+        await sfPost('/api/sf/register', { credential, label: navigator.platform || 'Phone', ...p });
+        await finish();
+      } catch (e) {
+        err(e.name === 'NotAllowedError' ? 'Face ID was cancelled.' :
+            e.name === 'InvalidStateError' ? 'This phone is already set up.' : e.message);
+      }
+    });
+    $('#sfUsePin').addEventListener('click', async () => {
+      const a = $('#sfNewPin').value, b2 = $('#sfNewPin2').value;
+      if (!/^\d{4,12}$/.test(a)) return err('A PIN is 4 to 12 digits.');
+      if (a !== b2) return err("The two PINs don't match.");
+      try { await sfPost('/api/sf/pin', { pin: a, ...(await proof()) }); await finish(); }
+      catch (e) { err(e.message); }
+    });
+    const off = $('#sfOff');
+    if (off) off.addEventListener('click', async () => {
+      try {
+        await sfPost('/api/sf/disable', await proof());
+        await sfStatus(); closeSheet(); toast('Face ID / PIN turned off'); resolve();
+      } catch (e) { err(e.message); }
+    });
+    $('#sheetClose').addEventListener('click', () => reject(new Error('cancelled')), { once: true });
+  });
 }
 
 /* ---------- cell sizing: row height == column width ---------- */
@@ -1168,9 +1411,20 @@ function colorRow(key, label, hint){
 
 function openSettings(){
   const t = L.theme;
+  const sf = SFX.st || {};
+  const sfState = !sf.enabled ? 'Off - power commands will ask you to set it up'
+    : sf.method === 'pin' ? 'PIN - asked when you open the app and for power commands'
+    : 'Face ID - asked when you open the app and for power commands';
   const body = `
     <div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
-      text-transform:uppercase;margin:16px 0 9px">Layout</div>
+      text-transform:uppercase;margin:16px 0 9px">Security</div>
+    <div class="srow" id="sfRow" style="cursor:pointer"><div style="flex-grow:1">
+      <div class="t">Face ID &amp; PIN</div>
+      <div class="d" id="sfRowState">${esc(sfState)}</div></div>
+      <div style="color:var(--muted);font-size:12px">${sf.enabled ? 'Change' : 'Set up'}</div></div>
+
+    <div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
+      text-transform:uppercase;margin:20px 0 9px">Layout</div>
     <div style="display:flex;gap:7px">
       ${[['rail','Scroll + rail'],['scroll','Plain scroll'],['pages','Pages']]
         .map(([k,n]) => `<div class="chip ${L.mode===k?'on':''}" data-mode="${k}"
@@ -1251,6 +1505,10 @@ $('#sheetBody').addEventListener('input', e => {
 });
 
 $('#sheetBody').addEventListener('click', async e => {
+  if (e.target.closest('#sfRow')){
+    sfSetup('settings').catch(() => {});
+    return;
+  }
   const m = e.target.closest('[data-mode]');
   if (m){ L.mode = m.dataset.mode; saveThemeSoon(); openSettings(); render(); return; }
 
@@ -2361,6 +2619,7 @@ async function poll(){
 
 (async function boot(){
   sizeGrid();
+  await sfOnLaunch();          // Face ID / PIN first, when it's set up
   try {
     await loadLayout();
     S = await api('/api/state');
