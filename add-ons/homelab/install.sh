@@ -240,7 +240,8 @@ finish() {   # $1 = CTID
   echo
   say "${b}Installed.${n}"
   echo "   Open on your phone:   ${b}http://$CT_IP:8788${n}"
-  echo "   In Aether Remote, add it to your PC switcher with that address."
+  echo "   Settings (computer):  ${b}http://$CT_IP:8788/manage${n}"
+  echo "   In Aether Remote, add it to your PC switcher as ${b}$CT_IP:8788${n}."
   echo "   Inside the container: 'update' gets the newest version,"
   echo "                         'aether-homelab status' shows how it's doing."
   echo "   Run this installer again any time to update it or replace its token."

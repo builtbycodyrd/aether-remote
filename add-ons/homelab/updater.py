@@ -148,18 +148,20 @@ def clear_busy():
 
 
 def start_auto(cfg):
-    """If auto_update is on, check daily and install anything newer."""
-    if not cfg.get("auto_update"):
-        return
+    """While auto_update is on, check daily and install anything newer.
+    `cfg` may be a function returning the live config, so switching it on or
+    off on the manage page counts without a restart."""
+    cfg_fn = cfg if callable(cfg) else (lambda: cfg)
 
     def loop():
         time.sleep(120)                      # let the server settle first
         while True:
             try:
-                check(force=True)
-                if state()["newer"]:
-                    install()
-                    return
+                if cfg_fn().get("auto_update"):
+                    check(force=True)
+                    if state()["newer"]:
+                        install()
+                        return
             except Exception:
                 pass
             time.sleep(24 * 3600)

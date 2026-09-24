@@ -44,6 +44,7 @@ import wol      # noqa: E402
 import tls      # noqa: E402
 import ssl      # noqa: E402
 import secondfactor   # noqa: E402
+import version        # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -566,6 +567,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/pc":
                 with open(paths.asset("pc.html"), "rb") as f:
                     return self._send(200, f.read(), "text/html; charset=utf-8")
+
+            if path == "/api/platform":
+                # The phone app is shared with the homelab add-on; this is how
+                # it knows it's talking to a PC (the default for older PCs too).
+                return self._send(200, {"kind": "pc", "name": auth.ACCOUNT,
+                                        "version": version.VERSION})
 
             if path == "/api/pairinfo":
                 ip = tailscale_ip()

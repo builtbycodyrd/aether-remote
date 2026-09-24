@@ -12,6 +12,8 @@ import os
 import shlex
 import ssl
 import subprocess
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -72,15 +74,16 @@ class Proxmox:
                     "status": g.get("status", "unknown"),   # running | stopped
                     "cpu": round((g.get("cpu") or 0) * 100),
                     "memPct": round((g.get("mem") or 0) / maxmem * 100),
+                    "uptime": int(g.get("uptime") or 0),
                 })
         out.sort(key=lambda x: (x["type"], x["vmid"] or 0))
         return out
 
     def guest_action(self, kind, vmid, action):
-        """start / stop (pull the plug) / shutdown (ask nicely)."""
+        """start / stop (pull the plug) / shutdown (ask nicely) / reboot."""
         if kind not in ("qemu", "lxc"):
             raise ValueError("unknown guest type")
-        if action not in ("start", "stop", "shutdown"):
+        if action not in ("start", "stop", "shutdown", "reboot"):
             raise ValueError("unknown action")
         return self._req(
             "/nodes/%s/%s/%s/status/%s" % (self.node, kind, vmid, action),
@@ -88,6 +91,23 @@ class Proxmox:
 
     def node_status(self):
         return self._req("/nodes/%s/status" % self.node) or {}
+
+    # Everything below is read-only and covered by Sys.Audit - the token
+    # the installer makes can already do it; nothing new is asked for.
+    def zfs_pools(self):
+        return self._req("/nodes/%s/disks/zfs" % self.node) or []
+
+    def net_rate(self):
+        """Bytes/s in and out, from the node's own 1-minute averages."""
+        rows = self._req("/nodes/%s/rrddata?timeframe=hour&cf=AVERAGE" % self.node) or []
+        for r in reversed(rows):
+            if r.get("netin") is not None and r.get("netout") is not None:
+                return float(r["netin"]), float(r["netout"])
+        return None
+
+    def last_backup(self):
+        rows = self._req("/nodes/%s/tasks?typefilter=vzdump&limit=1" % self.node) or []
+        return rows[0] if rows else None
 
 
 # ------------------------------------------------------------ stats as tiles
@@ -135,11 +155,145 @@ def node_stats(px):
     if load:
         try:
             one = float(load[0])
+            cores = ((s.get("cpuinfo") or {}).get("cpus")) or 4
             out["load"] = {"label": "Load", "big": "%.2f" % one, "unit": "1 min",
-                           "pct": min(100, round(one * 25))}
-        except (ValueError, IndexError):
+                           "pct": min(100, round(one / cores * 100))}
+        except (ValueError, IndexError, TypeError):
             pass
+
+    swap = s.get("swap") or {}
+    if swap.get("total"):
+        out["swap"] = {"label": "Swap", "big": "%.1f" % _gb(swap.get("used", 0)),
+                       "unit": "/ %.0f GB" % _gb(swap["total"]),
+                       "pct": round(swap.get("used", 0) / swap["total"] * 100)}
+
+    up = s.get("uptime")
+    if up:
+        out["uptime"] = {"label": "Uptime", "big": human_age(up), "unit": "", "pct": 0}
     return out
+
+
+def human_age(sec):
+    sec = int(sec or 0)
+    d, h, m = sec // 86400, sec % 86400 // 3600, sec % 3600 // 60
+    if d:
+        return "%dd %dh" % (d, h)
+    if h:
+        return "%dh %dm" % (h, m)
+    return "%dm" % m
+
+
+def _rate(bps):
+    for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
+        if bps < 1024 or unit == "GB/s":
+            return ("%.1f" % bps if unit in ("MB/s", "GB/s") and bps < 10 else "%.0f" % bps), unit
+        bps /= 1024.0
+
+
+def slow_stats(px, guests):
+    """The minute-by-minute ones: ZFS pools, network, last backup, guests
+    running. Read far less often than the node's live numbers."""
+    out = {}
+    try:
+        for p in px.zfs_pools():
+            name = str(p.get("name", "?"))
+            size = p.get("size") or 0
+            alloc = p.get("alloc") or 0
+            health = str(p.get("health", "?"))
+            out["zfs:" + name] = {
+                "label": "ZFS " + name, "big": health,
+                "unit": ("%.0f%% full" % (alloc / size * 100)) if size else "",
+                "pct": round(alloc / size * 100) if size else 0,
+                "bad": health != "ONLINE"}
+    except Exception:
+        pass
+    try:
+        r = px.net_rate()
+        if r:
+            (i, iu), (o, ou) = _rate(r[0]), _rate(r[1])
+            out["net"] = {"label": "Network \u2193 in", "big": "%s %s" % (i, iu),
+                          "unit": "\u2191 %s %s" % (o, ou), "pct": 0}
+    except Exception:
+        pass
+    try:
+        b = px.last_backup()
+        if b:
+            ok = str(b.get("status", "")) == "OK"
+            out["backup"] = {"label": "Last backup",
+                             "big": human_age(time.time() - (b.get("endtime") or b.get("starttime") or 0)) + " ago",
+                             "unit": "OK" if ok else str(b.get("status", "failed"))[:40],
+                             "pct": 0, "bad": not ok}
+        else:
+            out["backup"] = {"label": "Last backup", "big": "none", "unit": "no vzdump yet",
+                             "pct": 0, "bad": True}
+    except Exception:
+        pass
+    if guests is not None:
+        run = sum(1 for g in guests if g.get("status") == "running")
+        out["guests"] = {"label": "Guests", "big": "%d/%d" % (run, len(guests)),
+                         "unit": "running", "pct": round(run / len(guests) * 100) if guests else 0}
+    return out
+
+
+class Sampler:
+    """Reads Proxmox on its own thread so the phone's 2.5s poll never waits
+    on the network: live numbers every few seconds, the slow ones each
+    minute. /api/state just hands over the latest reading."""
+
+    FAST, SLOW = 3.0, 60.0
+
+    def __init__(self, cfg_fn):
+        self.cfg_fn = cfg_fn
+        self.lock = threading.Lock()
+        self.data = {"stats": {}, "guests": [], "at": 0, "error": None}
+        self._slow = {}
+        self._slow_at = 0
+        self._started = False
+
+    def start(self):
+        if not self._started:
+            self._started = True
+            threading.Thread(target=self._loop, daemon=True).start()
+
+    def poke(self):
+        """Read again now (after a start/stop, so the dot turns quickly)."""
+        threading.Thread(target=self.sample, daemon=True).start()
+
+    def sample(self):
+        cfg = self.cfg_fn()
+        px = Proxmox(cfg)
+        err = None
+        try:
+            guests = px.guests()
+        except Exception as e:
+            guests, err = [], str(e)
+        stats = node_stats(px)
+        if time.time() - self._slow_at > self.SLOW:
+            self._slow = slow_stats(px, guests)
+            self._slow_at = time.time()
+        elif "guests" in self._slow:
+            self._slow.update(slow_stats_guests(guests))
+        stats.update(self._slow)
+        with self.lock:
+            self.data = {"stats": stats, "guests": guests, "at": time.time(), "error": err}
+
+    def _loop(self):
+        while True:
+            try:
+                self.sample()
+            except Exception:
+                pass
+            time.sleep(self.FAST)
+
+    def get(self):
+        with self.lock:
+            return dict(self.data)
+
+
+def slow_stats_guests(guests):
+    run = sum(1 for g in guests if g.get("status") == "running")
+    return {"guests": {"label": "Guests", "big": "%d/%d" % (run, len(guests)),
+                       "unit": "running", "pct": round(run / len(guests) * 100) if guests else 0}}
 
 
 # ---------------------------------------------------------- systemd + docker

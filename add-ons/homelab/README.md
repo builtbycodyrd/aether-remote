@@ -1,16 +1,29 @@
 # Aether Homelab (add-on)
 
-Control your Proxmox server from the same phone app as your PC. It shows up in
-Aether Remote's PC switcher as another device, with the same tile layout — but
-the tiles drive the server:
+Control your Proxmox server from the same phone app as your PC. It runs the
+**exact same app** as Aether Remote — hold a tile to edit, drag to move, drag
+the corner to resize, sections, themes, the PIN, the PC switcher — only the
+tiles are homelab tiles:
 
-- **Server stats** — node CPU, RAM, disk and load, live
-- **VMs & containers** — every guest with a status dot; tap to start or shut down
-- **Services** — restart the systemd units or Docker containers you choose
+- **VMs & containers** — status and live CPU/RAM; tap for Start, Shut down,
+  Reboot and Force stop (the last three ask for your PIN)
+- **Server stats** — CPU, RAM, disk, load, swap, uptime, network, guests
+  running, each ZFS pool's health, and your last backup
+- **Services** — restart systemd units or Docker containers running inside
+  the add-on's own container
+- **Links** — shortcuts to your services' web pages, with your own pictures
+
+Plus a **manage page** for a computer's browser at `http://<address>:8788/manage`:
+which VMs/services/containers the phone may control, links and their pictures,
+updates, and signing every phone out.
 
 Same login as Aether Remote: a 6-digit code from your authenticator app, then a
 signed 30-day session. It is meant for your LAN or Tailscale — never expose it
 to the internet.
+
+In Aether Remote, add it to the PC switcher as `<address>:8788` (the port
+matters — the PC's is 8787). Switching carries your list of PCs along, so the
+homelab can switch back to your PC too.
 
 ## Install
 
@@ -69,7 +82,7 @@ digits). Once a PIN is set, opening the page asks for it too, and it locks
 again after 5 minutes in the background. The server enforces all of this, not
 just the page.
 
-The **PIN** button at the top changes it or turns it off (it asks for the
+**Settings → Face ID & PIN** changes it or turns it off (it asks for the
 current one first). Five wrong tries lock it for 5 minutes, then longer each
 time. A forgotten PIN can only be reset from the container: `aether-homelab
 reset-pin`.
@@ -79,7 +92,8 @@ is reached over plain http on your home network.
 
 ## Settings
 
-`/var/lib/aether-homelab/config.json`:
+The easy way is the manage page, `http://<address>:8788/manage`. Underneath,
+it all lives in `/var/lib/aether-homelab/config.json`:
 
 - `show.services` — systemd units to show restart tiles for, e.g.
   `[{"unit": "nginx", "label": "Nginx"}]`
@@ -109,3 +123,12 @@ pveum user delete aether@pve && pveum role delete AetherPower
 
 Add-on versions are tags named `homelab-vX.Y.Z` in this repo — separate from
 the Windows app's releases. See [CHANGELOG.md](CHANGELOG.md).
+
+## For developers: one phone app, two servers
+
+`web/shared/` (ui.html, app.js, login.html, icons) is a copy of the Windows
+app's phone app — the add-on ships its own copy because an install or update
+only takes this folder. Never edit it here: change the files at the repo root,
+then run `python3 add-ons/homelab/sync_ui.py`. `sync_ui.py --check` fails if
+the copy is out of date. The app asks `/api/platform` which kind of server it's
+on and swaps tile types and PC-only tools accordingly.

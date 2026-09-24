@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#01020a">
+<title>Aether Homelab - Manage</title>
+<link rel="icon" href="/static/icon-32.png" sizes="32x32">
+<style>
+  :root{
+    --bg:#01020a; --panel:#0b0d18; --line:#1c2033; --line2:#2a3048;
+    --text:#e6e8f2; --muted:#8a90a8; --primary:#7c3aed; --secondary:#22d3ee;
+    --good:#34d399; --bad:#f26d6d; --warn:#f2b95e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  body{padding:28px 20px 60px}
+  .wrap{max-width:880px;margin:0 auto}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
+  header img{width:40px;height:40px;border-radius:10px}
+  header h1{font-size:21px;margin:0;font-weight:650}
+  header .sub{color:var(--muted);font-size:13px}
+  header .grow{flex-grow:1}
+  a{color:var(--secondary)}
+  a.btn{text-decoration:none;color:var(--text)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:18px 20px;margin-bottom:16px}
+  .card h2{font-size:15px;margin:0 0 4px;font-weight:650}
+  .card .hint{color:var(--muted);font-size:12.5px;line-height:1.55;margin:0 0 14px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+  .row:first-of-type{border-top:0}
+  .grow{flex-grow:1;min-width:0}
+  .muted{color:var(--muted);font-size:12.5px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:0 0 auto}
+  .dot.on{background:var(--good);box-shadow:0 0 8px var(--good)}
+  .dot.bad{background:var(--bad)}
+  button,.btn{border:1px solid var(--line2);background:transparent;color:var(--text);
+    border-radius:10px;padding:8px 13px;font-size:13px;cursor:pointer;font:inherit;font-size:13px}
+  button.pri{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+  button.danger{color:var(--bad)}
+  button:disabled{opacity:.5;cursor:default}
+  input[type=text],input[type=url],input[type=password]{background:#05060e;border:1px solid var(--line2);
+    color:var(--text);border-radius:10px;padding:8px 11px;font:inherit;font-size:13px;min-width:0}
+  input[type=checkbox]{width:17px;height:17px;accent-color:var(--primary)}
+  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+  .seg label{padding:7px 13px;font-size:13px;cursor:pointer}
+  .seg input{display:none}
+  .seg input:checked + span{color:#fff}
+  .seg label:has(input:checked){background:var(--primary)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:2px 18px}
+  .pic{width:40px;height:40px;border-radius:10px;object-fit:cover;flex:0 0 auto;
+    background:linear-gradient(140deg,var(--primary),var(--secondary));display:flex;
+    align-items:center;justify-content:center;font-weight:700;color:#fff}
+  .msg{font-size:12.5px;margin-top:10px;min-height:16px}
+  .msg.err{color:var(--bad)} .msg.ok{color:var(--good)}
+  code{background:#05060e;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+  #pin{position:fixed;inset:0;background:rgba(1,2,10,.88);backdrop-filter:blur(6px);
+    display:flex;align-items:center;justify-content:center;z-index:50}
+  #pin[hidden]{display:none}
+  #pin .box{background:var(--panel);border:1px solid var(--line2);border-radius:18px;
+    padding:24px;width:320px;text-align:center}
+  #pin input{width:100%;text-align:center;font-size:22px;letter-spacing:6px;margin:14px 0 4px}
+  #pin .btns{display:flex;gap:8px;justify-content:center;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/static/icon-180.png" alt="">
+    <div class="grow">
+      <h1>Aether Homelab</h1>
+      <div class="sub" id="sub">loading…</div>
+    </div>
+    <a class="btn" href="/">Phone view</a>
+  </header>
+
+  <div class="card">
+    <h2>Proxmox</h2>
+    <div id="px" class="muted">…</div>
+  </div>
+
+  <div class="card">
+    <h2>What the phone can control</h2>
+    <p class="hint">Only what's ticked here shows up in the phone's Add tile list, and the
+      server refuses anything else - even from a signed-in phone. Saving asks for your PIN
+      if you've set one.</p>
+    <div style="margin-bottom:10px">
+      <b style="font-size:13px">VMs &amp; containers</b>&nbsp;
+      <span class="seg"><label><input type="radio" name="gmode" value="all"><span>All</span></label>
+        <label><input type="radio" name="gmode" value="list"><span>Only these</span></label></span>
+    </div>
+    <div class="grid2" id="guests"></div>
+
+    <div style="margin:20px 0 6px"><b style="font-size:13px">Services</b>
+      <span class="muted">- systemd units inside this add-on's container</span></div>
+    <div id="svcs"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <input type="text" id="svcUnit" placeholder="unit, e.g. nginx" style="flex:1">
+      <input type="text" id="svcLabel" placeholder="label (optional)" style="flex:1">
+      <button id="svcAdd">Add</button>
+    </div>
+
+    <div style="margin:20px 0 6px"><b style="font-size:13px">Docker containers</b>
+      <span class="muted">- comma-separated names, or <code>all</code>, or leave empty</span></div>
+    <input type="text" id="containers" style="width:100%" placeholder="e.g. sonarr, radarr">
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:16px">
+      <button class="pri" id="showSave">Save</button>
+      <div class="msg" id="showMsg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Links</h2>
+    <p class="hint">Shortcuts to your services' web pages. Add them as tiles from the phone's
+      Add tile → Links. Give each a picture here (PNG, JPEG, WebP or GIF, up to 512 KB).</p>
+    <div id="links"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <input type="text" id="lName" placeholder="Name - e.g. Jellyfin" style="flex:1;min-width:150px">
+      <input type="url" id="lUrl" placeholder="http://192.168.x.x:8096" style="flex:2;min-width:200px">
+      <button id="lAdd">Add link</button>
+    </div>
+    <div class="msg" id="lMsg"></div>
+    <input type="file" id="picker" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+  </div>
+
+  <div class="card">
+    <h2>Updates</h2>
+    <div id="upd" class="muted">…</div>
+    <div class="row" style="border:0;padding-left:0">
+      <input type="checkbox" id="auto"><label for="auto" class="grow" style="font-size:13px">
+        Install updates automatically (checked daily)</label>
+    </div>
+    <div class="msg" id="updMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Security</h2>
+    <div id="sec" class="muted">…</div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+      <button class="danger" id="signout">Sign out every phone</button>
+      <div class="msg" id="secMsg"></div>
+    </div>
+    <p class="hint" style="margin:12px 0 0">Forgot the PIN? In the container's console:
+      <code>aether-homelab reset-pin</code>. New phone? <code>aether-homelab code</code>
+      shows the login QR again. There's no way to do either over the network, on purpose.</p>
+  </div>
+</div>
+
+<div id="pin" hidden>
+  <div class="box">
+    <div style="font-weight:650" id="pinTitle">Enter your PIN</div>
+    <input type="password" id="pinIn" inputmode="numeric" maxlength="12" autocomplete="off">
+    <div class="msg err" id="pinErr"></div>
+    <div class="btns"><button id="pinCancel">Cancel</button><button class="pri" id="pinGo">OK</button></div>
+  </div>
+</div>
+<script src="/manage.js"></script>
+</body>
+</html>

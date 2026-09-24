@@ -1,3 +1,25 @@
+# 0.3.0
+
+**The same app as your PC - with homelab tiles.** The add-on now runs the
+exact phone app Aether Remote uses, so everything you can do there works here.
+
+- **Customize everything:** hold a tile to edit, drag to move, drag the corner
+  to resize, add and rename sections, pick themes and colours in Settings.
+- **Add tile** has homelab tiles:
+  - **VMs & CTs** - status, live CPU and RAM (make it taller for bars). Tap one
+    for Start, Shut down, Reboot and Force stop (the last three ask for your PIN).
+  - **Server** - CPU, RAM, disk, load, swap, uptime, network, guests running,
+    every ZFS pool's health (red when it isn't ONLINE), and your last backup.
+  - **Services** - restart services running inside the add-on's container.
+  - **Links** - shortcuts to your services' web pages, with your own pictures.
+- **The PC switcher works both ways:** switching carries your saved PCs along,
+  so the homelab can switch back to your PC too.
+- **A manage page** at `http://<address>:8788/manage` on a computer: choose
+  which VMs, services and containers the phone may control (PIN-protected),
+  manage links and their pictures, updates, and sign every phone out.
+- Everything still uses the same locked-down Proxmox token - nothing new is
+  asked for. The new server stats (ZFS, network, backups) are read-only.
+
 # 0.2.0
 
 A PIN for the things that can't be undone.
