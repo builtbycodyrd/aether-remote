@@ -634,16 +634,25 @@ def _read_now_playing():
             "playing": status == 4, "status": status}
 
 
-def now_playing(ttl=3.0):
-    now = time.time()
-    with _np_lock:
-        if now - _np["at"] < ttl:
-            return _np["val"]
-    val = _read_now_playing()
+def _np_refresh():
+    try:
+        val = _read_now_playing()
+    except Exception:
+        val = None
     with _np_lock:
         _np["at"] = time.time()
         _np["val"] = val
-    return val
+        _np["busy"] = False
+
+
+def now_playing(ttl=3.0):
+    """The last reading, straight away. The PowerShell read takes about a
+    second, so it happens on its own thread - /api/state never waits on it."""
+    with _np_lock:
+        if time.time() - _np["at"] >= ttl and not _np.get("busy"):
+            _np["busy"] = True
+            threading.Thread(target=_np_refresh, daemon=True).start()
+        return _np["val"]
 
 
 # ------------------------------------------------------- running apps / tasks
