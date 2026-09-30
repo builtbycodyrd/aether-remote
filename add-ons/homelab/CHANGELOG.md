@@ -1,3 +1,10 @@
+# 0.3.2
+
+- The phone app is refreshed to match Aether Remote 1.4.0. Its new pieces
+  (the Now Playing redesign, the Files tab, phone-to-PC copy/paste) are
+  PC-only, so nothing new appears here - this keeps the shared app
+  identical on both.
+
 # 0.3.1
 
 - The add-on's container has no password on purpose, so its Console tab's

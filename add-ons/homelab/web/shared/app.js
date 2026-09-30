@@ -135,6 +135,7 @@ const SCOPE_TEXT = {
   security: 'Change security settings',
   'guest.shutdown': 'Shut down a VM', 'guest.reboot': 'Reboot a VM',
   'guest.stop': 'Force-stop a VM', 'manage': 'Change what the phone controls',
+  upload: 'Upload files to the PC',
 };
 function scopeText(s){
   if (SCOPE_TEXT[s]) return SCOPE_TEXT[s];
@@ -438,7 +439,7 @@ function tileInner(t){
       <div class="nm" style="flex-grow:1">${esc(t.label)}</div></div>`;
 
   case 'nowplaying':
-    return nowPlayingInner();
+    return nowPlayingInner(t);
 
   case 'guest':
     return guestInner(t);
@@ -564,29 +565,276 @@ function openGuest(t){
   }));
 }
 
-/* The now-playing card. Self-contained inline styles so it needs no extra
-   CSS, and it fills whatever tile size it is given. */
-function nowPlayingInner(){
+/* ================= now playing =================
+ * Live from the PC's own media controls (media.py): whatever Windows shows in
+ * its volume flyout - Spotify, a YouTube tab, a game launcher. The server
+ * says where the track is right now and whether it's moving; between polls
+ * the bar is carried forward here, so it glides instead of jumping every
+ * 2.5 s. The artwork's main colour (picked on the PC) tints the tile, blurred
+ * and darkened behind the cover, the way Spotify does its headers. */
+const NP = { at: 0, seen: null, scrub: null, scrubEnd: 0, open: false };
+const NPI = {
+  prev: '<svg viewBox="0 0 24 24"><path d="M5.5 5h2.2v14H5.5zM20 6v12a1 1 0 0 1-1.6.8l-8.6-6a1 1 0 0 1 0-1.6l8.6-6A1 1 0 0 1 20 6z"/></svg>',
+  next: '<svg viewBox="0 0 24 24"><path d="M16.3 5h2.2v14h-2.2zM4 6v12a1 1 0 0 0 1.6.8l8.6-6a1 1 0 0 0 0-1.6l-8.6-6A1 1 0 0 0 4 6z"/></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="M7 4.9v14.2a1.1 1.1 0 0 0 1.7.9l11-7.1a1.1 1.1 0 0 0 0-1.8l-11-7.1A1.1 1.1 0 0 0 7 4.9z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.6" height="16" rx="1.3"/><rect x="13.9" y="4" width="4.6" height="16" rx="1.3"/></svg>',
+  note: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  volLo: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h3.5L12 5v14l-4.5-4H4z"/></svg>',
+  volHi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9h3.5L12 5v14l-4.5-4H4z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+};
+
+function npNow(){
   const n = S && S.nowplaying;
-  const wrap = (inner) => `<div style="display:flex;flex-direction:column;
-    justify-content:center;gap:12px;height:100%;padding:12px 15px">${inner}</div>`;
-  if (!n) return wrap(`<div style="color:var(--muted);font-size:13px;
-    text-align:center">Nothing playing</div>`);
-  const b = 'background:none;border:0;color:var(--text);cursor:pointer;' +
-            'padding:6px;line-height:1;font-size:22px';
-  return wrap(`
-    <div style="min-width:0">
-      <div style="font-weight:600;font-size:15px;overflow:hidden;
-        text-overflow:ellipsis;white-space:nowrap">${esc(n.title)}</div>
-      <div style="color:var(--muted);font-size:12.5px;overflow:hidden;
-        text-overflow:ellipsis;white-space:nowrap">${esc(n.artist || n.album || '')}</div>
-    </div>
-    <div style="display:flex;gap:16px;align-items:center;justify-content:center">
-      <button data-np="media.prev" aria-label="Previous" style="${b}">&#9198;</button>
-      <button data-np="media.playpause" aria-label="Play or pause"
-        style="${b};font-size:27px">${n.playing ? '&#9208;' : '&#9654;'}</button>
-      <button data-np="media.next" aria-label="Next" style="${b}">&#9197;</button>
-    </div>`);
+  if (!n) return null;
+  if (n !== NP.seen){ NP.seen = n; NP.at = performance.now(); }
+  return n;
+}
+function npPos(n){
+  let p = +n.pos || 0;
+  if (n.playing && n.dur) p += (performance.now() - NP.at) / 1000 * (n.rate || 1);
+  return Math.max(0, n.dur ? Math.min(p, n.dur) : p);
+}
+function npTime(sec){
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60),
+        x = String(sec % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`;
+}
+function npRGB(n){
+  const c = n && Array.isArray(n.color) && n.color.length === 3 ? n.color : [88, 70, 160];
+  return c.map(v => Math.max(0, Math.min(255, v | 0))).join(',');
+}
+const npArt = n => n.art ? '/api/np/art?v=' + encodeURIComponent(n.art) : '';
+const npIcon = n => n.icon ? '/api/np/icon?v=' + encodeURIComponent(n.icon) : '';
+const npCan = n => n.can || { toggle: true, next: true, prev: true, seek: false };
+
+function npBg(n){
+  const art = npArt(n) || npIcon(n);
+  return `<div class="np-bg" style="--np:${npRGB(n)}">${
+    art ? `<img src="${art}" alt="" onerror="this.remove()">` : ''}</div>`;
+}
+function npCover(n, cls){
+  const art = npArt(n), icon = npIcon(n);
+  if (art) return `<div class="np-cover ${cls || ''}"><img src="${art}" alt=""></div>`;
+  return `<div class="np-cover is-icon ${cls || ''}" style="--np:${npRGB(n)}">${
+    icon ? `<img src="${icon}" alt="" onerror="this.outerHTML=NPI.note">` : NPI.note}</div>`;
+}
+function npBadge(n){
+  const icon = npIcon(n);
+  return `<div class="np-app">${icon ? `<img src="${icon}" alt="">` : NPI.note}<span>${
+    esc(n.appName || 'Now playing')}</span></div>`;
+}
+function npSeek(n){
+  if (!(n.dur > 0)) return `<div class="np-seek np-nodur"><div class="np-track"></div>
+    <div class="np-times"><span>${n.playing ? 'Live' : ''}</span><span></span></div></div>`;
+  const p = npPos(n), pct = (p / n.dur * 100).toFixed(2) + '%';
+  return `<div class="np-seek ${npCan(n).seek ? 'can' : ''}">
+    <div class="np-track"><i class="np-fill" style="width:${pct}"></i><b class="np-knob" style="left:${pct}"></b></div>
+    <div class="np-times"><span class="np-el">${npTime(p)}</span><span class="np-rem">-${npTime(n.dur - p)}</span></div></div>`;
+}
+function npBtns(n, which){
+  const can = npCan(n);
+  const b = (op, icon, en, cls) => `<button class="np-b ${cls || ''}" data-npc="${op}"
+    aria-label="${op === 'toggle' ? (n.playing ? 'Pause' : 'Play') : op === 'next' ? 'Next' : 'Previous'}"
+    ${en ? '' : 'disabled'}>${icon}</button>`;
+  return `<div class="np-ctl">${which !== 'pp' ? b('prev', NPI.prev, can.prev) : ''}${
+    b('toggle', n.playing ? NPI.pause : NPI.play, can.toggle, 'np-pp')}${
+    which !== 'pp' ? b('next', NPI.next, can.next) : ''}</div>`;
+}
+
+function npSize(t){
+  return t.h >= 3 && t.w >= 2 ? 'l' : t.h >= 2 ? 'm' : 's';
+}
+
+function nowPlayingInner(t){
+  t = t || { w: 4, h: 2 };
+  const n = npNow(), size = npSize(t);
+  const cls = `np np-${size}${t.w <= 2 ? ' np-narrow' : ''}${t.w === 1 ? ' np-w1' : ''}`;
+  if (!n) return `<div class="${cls} np-empty"><div class="np-idle">${NPI.note}
+    <span>Not playing</span>${size !== 's' ? '<small>Play something on the PC and it shows up here.</small>' : ''}</div></div>`;
+  const text = `<div class="np-text">${size !== 's' ? npBadge(n) : ''}
+    <div class="np-title">${esc(n.title)}</div>
+    <div class="np-artist">${esc(n.artist || n.album || n.appName || '')}</div></div>`;
+  if (t.w === 1) return `<div class="${cls}">${npBg(n)}${npCover(n)}${npBtns(n, 'pp')}</div>`;
+  if (size === 's'){
+    const line = n.dur > 0 ? `<div class="np-line"><i class="np-fill" style="width:${(npPos(n) / n.dur * 100).toFixed(2)}%"></i></div>` : '';
+    return `<div class="${cls}">${npBg(n)}${npCover(n)}${text}${npBtns(n, t.w >= 4 ? 'all' : 'pp')}${line}</div>`;
+  }
+  if (size === 'l') return `<div class="${cls}" style="--h:${t.h}">${npBg(n)}
+    ${npCover(n, 'np-big')}${text}${npSeek(n)}${npBtns(n, 'all')}</div>`;
+  return `<div class="${cls}">${npBg(n)}<div class="np-top">${npCover(n)}${text}</div>
+    ${npSeek(n)}${npBtns(n, 'all')}</div>`;
+}
+
+/* What would make a tile look different - everything but the position,
+   which the ticker moves on its own. */
+function npKey(t){
+  const n = S && S.nowplaying;
+  return JSON.stringify([npSize(t), t.w, n && [n.title, n.artist, n.album, n.appName,
+    n.art, n.icon, n.playing, n.dur > 0, n.can, n.color]]);
+}
+
+/* The bar and the clock, four times a second, without touching anything
+   else on the page. */
+function npTick(){
+  const n = npNow();
+  if (!n || !(n.dur > 0)) return;
+  const p = NP.scrub ? NP.scrub.pos : npPos(n);
+  const pct = (p / n.dur * 100).toFixed(2) + '%';
+  document.querySelectorAll('.np-fill').forEach(e => { e.style.width = pct; });
+  document.querySelectorAll('.np-knob').forEach(e => { e.style.left = pct; });
+  const el = npTime(p), rem = '-' + npTime(n.dur - p);
+  document.querySelectorAll('.np-el').forEach(e => { if (e.textContent !== el) e.textContent = el; });
+  document.querySelectorAll('.np-rem').forEach(e => { if (e.textContent !== rem) e.textContent = rem; });
+}
+setInterval(() => { if (!document.hidden) npTick(); }, 250);
+
+/* Re-draw every now-playing surface (after a tap, before the PC answers). */
+function npPaint(){
+  if (L && !editing) for (const sec of L.sections) for (const t of sec.tiles){
+    if (t.kind !== 'nowplaying') continue;
+    const el = board.querySelector('[data-tile="' + t.id + '"]');
+    if (el){ el.innerHTML = nowPlayingInner(t); el._npk = npKey(t); }
+  }
+  if (NP.open) npFullDraw();
+}
+
+async function npCmd(op, pos){
+  const n = S && S.nowplaying;
+  if (n){
+    // Answer the finger straight away; the PC's reply corrects it if needed.
+    n.pos = op === 'seek' ? pos : npPos(n);
+    if (op === 'toggle') n.playing = !n.playing;
+    NP.seen = n; NP.at = performance.now();
+    npPaint();
+  }
+  if (navigator.vibrate) navigator.vibrate(8);
+  try {
+    const j = await api('/api/media', op === 'seek' ? { op, pos } : { op });
+    if (S && j.nowplaying !== undefined){ S.nowplaying = j.nowplaying; npPaint(); }
+    if (op === 'next' || op === 'prev') setTimeout(poll, 900);
+  } catch(err){
+    toast(err.message);
+    poll();
+  }
+}
+
+/* Scrubbing: press anywhere on the bar and drag, iOS-style - the bar thickens
+   under your finger and the time follows it; letting go seeks the PC. */
+function npFrac(e, sk){
+  const r = sk.querySelector('.np-track').getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)));
+}
+document.addEventListener('pointerdown', e => {
+  const sk = e.target.closest('.np-seek.can');
+  const n = S && S.nowplaying;
+  if (!sk || editing || !n || !(n.dur > 0)) return;
+  // Ours, not the board's: no long-press-to-edit, no tile tap.
+  e.stopPropagation(); e.preventDefault();
+  NP.scrub = { el: sk, id: e.pointerId, pos: npFrac(e, sk) * n.dur };
+  sk.classList.add('scrub');
+  npTick();
+}, true);
+window.addEventListener('pointermove', e => {
+  if (!NP.scrub || e.pointerId !== NP.scrub.id) return;
+  const n = S && S.nowplaying;
+  if (!n) return;
+  NP.scrub.pos = npFrac(e, NP.scrub.el) * n.dur;
+  npTick();
+});
+['pointerup', 'pointercancel'].forEach(ev => window.addEventListener(ev, e => {
+  if (!NP.scrub || e.pointerId !== NP.scrub.id) return;
+  const { el, pos } = NP.scrub;
+  NP.scrub = null; NP.scrubEnd = Date.now();
+  el.classList.remove('scrub');
+  if (ev === 'pointerup') npCmd('seek', Math.round(pos * 10) / 10);
+}));
+
+/* The full player: tap the tile and it rises up over everything - big cover,
+   the track, the bar, the buttons and the PC's volume. Swipe down to close. */
+function npFullEl(){
+  let el = document.getElementById('npFull');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'npFull';
+    el.className = 'npf';
+    document.body.appendChild(el);
+    el.addEventListener('click', e => {
+      if (e.target.closest('[data-npclose]')) return closeNowPlaying();
+      const c = e.target.closest('[data-npc]');
+      if (c && !c.disabled) npCmd(c.dataset.npc);
+    });
+    el.addEventListener('input', e => {
+      if (!e.target.matches('.npf-vol')) return;
+      const v = +e.target.value;
+      e.target.style.setProperty('--pct', v + '%');
+      pending = v; flushVolume();
+    });
+    el.addEventListener('pointerdown', e => {
+      if (e.target.matches('.npf-vol')){ draggingSlider = true; return; }
+      if (e.target.closest('.np-seek,button,input')) return;
+      NP.drag = { y: e.clientY, id: e.pointerId, dy: 0 };
+      el.style.transition = 'none';
+    });
+    el.addEventListener('pointermove', e => {
+      if (!NP.drag || e.pointerId !== NP.drag.id) return;
+      NP.drag.dy = Math.max(0, e.clientY - NP.drag.y);
+      el.style.transform = `translateY(${NP.drag.dy}px)`;
+    });
+    const end = () => {
+      if (draggingSlider){ draggingSlider = false; suppressUntil = Date.now() + 700; }
+      if (!NP.drag) return;
+      const dy = NP.drag.dy; NP.drag = null;
+      el.style.transition = ''; el.style.transform = '';
+      if (dy > 110) closeNowPlaying();
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+  return el;
+}
+function npFullDraw(){
+  const el = npFullEl(), n = npNow();
+  const key = JSON.stringify([n && [n.title, n.artist, n.album, n.appName, n.art, n.icon,
+    n.playing, n.dur > 0, n.can, n.color]]);
+  if (el._k !== key){
+    el._k = key;
+    el.innerHTML = !n
+      ? `<div class="np-bg" style="--np:40,40,56"></div><div class="npf-in">
+           <div class="npf-head"><button class="npf-x" data-npclose aria-label="Close">${NPI.down}</button></div>
+           <div class="np-idle" style="flex:1">${NPI.note}<span>Not playing</span>
+             <small>Play something on the PC and it shows up here.</small></div></div>`
+      : `${npBg(n)}<div class="npf-in">
+           <div class="npf-head"><button class="npf-x" data-npclose aria-label="Close">${NPI.down}</button>
+             ${npBadge(n)}<span style="width:38px"></span></div>
+           <div class="npf-art">${npCover(n, 'np-big')}</div>
+           <div class="npf-meta"><div class="np-title">${esc(n.title)}</div>
+             <div class="np-artist">${esc(n.artist || n.appName || '')}</div>
+             ${n.album && n.album !== n.title ? `<div class="npf-album">${esc(n.album)}</div>` : ''}</div>
+           ${npSeek(n)}${npBtns(n, 'all')}
+           <div class="npf-volrow">${NPI.volLo}
+             <input type="range" class="npf-vol" min="0" max="100" aria-label="PC volume">${NPI.volHi}</div>
+         </div>`;
+  }
+  const vol = el.querySelector('.npf-vol');
+  if (vol && S && !draggingSlider && Date.now() >= suppressUntil && +vol.value !== S.volume){
+    vol.value = S.volume;
+    vol.style.setProperty('--pct', S.volume + '%');
+  }
+  npTick();
+}
+function openNowPlaying(){
+  NP.open = true;
+  const el = npFullEl();
+  el._k = null;
+  npFullDraw();
+  requestAnimationFrame(() => el.classList.add('show'));
+}
+function closeNowPlaying(){
+  NP.open = false;
+  const el = document.getElementById('npFull');
+  if (el) el.classList.remove('show');
 }
 
 function iconFor(ref){
@@ -678,6 +926,7 @@ function tileHTML(t, secId){
   if (!editing && t.kind === 'toggle' && toggleOn(t.ref)) cls.push('on');
   if (t.kind === 'action' && /restart|shutdown|signout/.test(t.ref)) cls.push('danger');
   if (t.kind === 'service' || t.kind === 'docker') cls.push('danger');
+  if (t.kind === 'nowplaying') cls.push('npt');
   if (armed === t.id) cls.push('armed');
   return `<div class="${cls.join(' ')}" data-tile="${t.id}" data-sec="${secId}"
     style="grid-column:span ${t.w};grid-row:span ${t.h}">
@@ -743,8 +992,11 @@ function refresh(){
       }
 
       else if (t.kind === 'nowplaying'){
-        // No images inside, so a full inner re-render is cheap and flicker-free.
-        el.innerHTML = tileInner(t);
+        // Only when the track, state or buttons changed - the artwork must
+        // not reload every poll, and the ticker moves the bar in between.
+        if (NP.scrub) continue;
+        const k = npKey(t);
+        if (el._npk !== k){ el.innerHTML = tileInner(t); el._npk = k; }
       }
 
       else if (t.kind === 'guest' || t.kind === 'service' || t.kind === 'docker'){
@@ -854,15 +1106,14 @@ board.addEventListener('click', async e => {
   const addSec = e.target.closest('[data-addtile]');
   if (addSec){ openAdd(addSec.dataset.addtile); return; }
 
-  // Now-playing transport buttons: act on the button, not the whole tile.
-  const np = e.target.closest('[data-np]');
-  if (np && !editing){
+  // Now-playing buttons act on the button, not the whole tile.
+  const npc = e.target.closest('[data-npc]');
+  if (npc && !editing){
     e.stopPropagation();
-    api('/api/tile', { kind: 'action', ref: np.dataset.np })
-      .then(() => { setTimeout(poll, 400); })
-      .catch(err => toast(err.message));
+    if (!npc.disabled) npCmd(npc.dataset.npc);
     return;
   }
+  if (Date.now() - NP.scrubEnd < 400) return;     // the end of a drag, not a tap
 
   const el = e.target.closest('[data-tile]');
   if (!el) return;
@@ -875,6 +1126,7 @@ board.addEventListener('click', async e => {
   if (editing) return;
 
   if (t.kind === 'stream'){ openDesktop(t); return; }
+  if (t.kind === 'nowplaying'){ openNowPlaying(); return; }
   if (t.kind === 'slider') return;
   if (t.kind === 'guest'){ openGuest(t); return; }
   if (t.kind === 'link'){
@@ -2272,12 +2524,27 @@ function fsEnterKey(){
       fsSend(() => api('/api/press', {name, mods}));
       return;
     }
-    // A real keyboard sending Ctrl+C: the character never reaches `input`,
-    // so it has to be caught here.
+    // A real keyboard's Ctrl/Cmd+C and +V copy and paste between the phone
+    // and the PC, same as the buttons. (+V is left to the paste event.)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[cv]$/i.test(e.key)){
+      if (e.key.toLowerCase() === 'c'){ e.preventDefault(); fsCopy(); }
+      return;
+    }
+    // Any other shortcut: the character never reaches `input`, so it has to
+    // be caught here.
     if ((e.ctrlKey || e.altKey || e.metaKey) && e.key.length === 1){
       e.preventDefault();
       fsSend(() => api('/api/press', {name:e.key.toLowerCase(), mods}));
     }
+  });
+
+  // Pasting into the box (long-press > Paste, or a keyboard's Ctrl+V) goes
+  // to the PC in one piece - newlines and all - rather than typed out.
+  box.addEventListener('paste', e => {
+    const t = e.clipboardData && e.clipboardData.getData('text/plain');
+    if (!t) return;
+    e.preventDefault();
+    fsPaste(t);
   });
 
   // Tapping away from the box means the PC is no longer following it, so do
@@ -2285,6 +2552,67 @@ function fsEnterKey(){
   box.addEventListener('blur', () => { box.value = ''; FS.sent = ''; });
   box.addEventListener('focus', () => { box.value = ''; FS.sent = ''; });
 })();
+
+/* ---------- copy and paste, the way a phone does it ----------
+ * Copy: Ctrl+C on the PC, and whatever it copied lands on THIS phone's
+ * clipboard - paste it into Messages or anywhere. Paste: this phone's
+ * clipboard goes to the PC and Ctrl+V puts it where the cursor is. Text only,
+ * never logged. Browsers only allow this over https and only during the tap
+ * itself, which is why the copy starts writing before the PC has answered. */
+async function fsCopy(){
+  fsSync();
+  const req = fsQueue.then(() => api('/api/clipboard/copy', {}));
+  req.catch(() => {});
+  let wrote = false;
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write){
+    try {
+      // Safari: the write must begin inside the tap; its text can arrive later.
+      const blob = req.then(r => r.text ? new Blob([r.text], { type: 'text/plain' })
+                                        : Promise.reject(new Error('empty')));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      wrote = true;
+    } catch(e){}
+  }
+  let r;
+  try { r = await req; }
+  catch(err){ fsToast(err.message); return; }
+  if (!r.text){
+    fsToast(r.changed ? 'That wasn\'t text' : 'Nothing is selected on the PC');
+    return;
+  }
+  if (!wrote){
+    try { await navigator.clipboard.writeText(r.text); wrote = true; } catch(e){}
+  }
+  if (wrote){
+    if (navigator.vibrate) navigator.vibrate(10);
+    fsToast('Copied to your phone' + (r.truncated ? ' (first 100,000 characters)' : ''), 1300);
+  } else {
+    const box = fsq('fsClip'), ta = fsq('fsClipText');
+    ta.value = r.text;
+    box.hidden = false;
+    ta.focus(); ta.select();
+  }
+}
+
+async function fsPaste(text){
+  if (text === undefined){
+    try {
+      // iOS shows its own little "Paste" button for this - that's normal.
+      text = await navigator.clipboard.readText();
+    } catch(e){
+      fsq('fsKeys').focus();
+      fsToast('Long-press the typing box and choose Paste', 2800);
+      return;
+    }
+  }
+  if (!text){ fsToast('Your phone\'s clipboard is empty'); return; }
+  fsSync();
+  try {
+    await fsSend(() => api('/api/clipboard/paste', { text }));
+    fsToast('Pasted on the PC', 1100);
+  } catch(err){ fsToast(err.message); }
+  fsClearTyping();
+}
 
 /* ---------- the toolbars ---------- */
 (function wireFsChrome(){
@@ -2309,6 +2637,7 @@ function fsEnterKey(){
   };
 
   fsq('fsEnter').onclick = fsEnterKey;
+  fsq('fsClipDone').onclick = () => { fsq('fsClip').hidden = true; };
 
   // The dock's buttons must not steal focus from the input: on a phone,
   // losing focus closes the keyboard, and pressing Ctrl+C should not shut
@@ -2318,6 +2647,8 @@ function fsEnterKey(){
   });
 
   dock.addEventListener('click', async e => {
+    const clip = e.target.closest('[data-clip]');
+    if (clip){ if (clip.dataset.clip === 'copy') fsCopy(); else fsPaste(); return; }
     const pr = e.target.closest('[data-press]');
     const cb = e.target.closest('[data-combo]');
     if (!pr && !cb) return;
@@ -2689,71 +3020,7 @@ function pcsMarkTitle(){
 $('#title').addEventListener('click', openPCs);
 
 /* ================= tools (clipboard, files) ================= */
-async function openTools(){
-  openSheet('Tools', `
-    <div style="margin-top:12px;display:flex;gap:8px">
-      <div class="btn wide" id="openFiles" style="flex:1">📁 Files</div>
-      <div class="btn wide" id="openApps" style="flex:1">🗔 Running apps</div>
-    </div>
-    <div style="margin-top:18px">
-      <div class="t" style="margin-bottom:7px">PC clipboard</div>
-      <textarea class="field" id="clipFrom" readonly rows="3"
-        placeholder="Whatever is copied on the PC shows here"
-        style="width:100%;resize:vertical"></textarea>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn" id="clipGet">Get from PC</button>
-        <button class="btn" id="clipCopy">Copy on phone</button>
-      </div>
-    </div>
-    <div style="margin-top:18px">
-      <div class="t" style="margin-bottom:7px">Send to the PC</div>
-      <textarea class="field" id="clipTo" rows="3"
-        placeholder="Type or paste here, then Send — it lands on the PC clipboard"
-        style="width:100%;resize:vertical"></textarea>
-      <div class="btn wide pri" id="clipSend" style="margin-top:9px">Send to PC clipboard</div>
-    </div>
-    <div id="clipMsg" style="font-size:12px;color:var(--muted);margin-top:10px;
-      line-height:1.5"></div>`,
-    `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
-
-  $('#openFiles').addEventListener('click', () => openFiles(''));
-  $('#openApps').addEventListener('click', openApps);
-
-  const msg = (m) => { const e = $('#clipMsg'); if (e) e.textContent = m; };
-
-  $('#clipGet').addEventListener('click', async () => {
-    try {
-      const r = await api('/api/clipboard');
-      $('#clipFrom').value = r.text || '';
-      msg(r.text ? (r.truncated ? 'Showing the first 100,000 characters'
-                                : 'Got the PC clipboard')
-                 : 'The PC clipboard is empty.');
-    } catch(e){ msg(e.message); }
-  });
-
-  $('#clipCopy').addEventListener('click', async () => {
-    const box = $('#clipFrom');
-    if (!box.value){ msg('Nothing to copy — tap Get from PC first.'); return; }
-    // navigator.clipboard needs a secure context, which plain http on a
-    // tailnet is not, so fall back to selecting the text for a long-press.
-    try { await navigator.clipboard.writeText(box.value); msg('Copied to your phone.'); }
-    catch(e){ box.focus(); box.select(); msg('Long-press the highlighted text and choose Copy.'); }
-  });
-
-  $('#clipSend').addEventListener('click', async () => {
-    const text = $('#clipTo').value;
-    if (!text){ msg('Type something to send first.'); return; }
-    try {
-      const r = await api('/api/clipboard', { text });
-      msg('Sent ' + r.chars + ' character' + (r.chars === 1 ? '' : 's')
-          + ' to the PC clipboard.');
-    } catch(e){ msg(e.message); }
-  });
-
-  // Show what's on the PC right now, without making them tap Get first.
-  try { const r = await api('/api/clipboard'); $('#clipFrom').value = r.text || ''; }
-  catch(e){}
-}
+async function openTools(){ return openApps(); }
 $('#toolsBtn').addEventListener('click', openTools);
 
 /* Running apps, with an End button each. "End" is taskkill /T /F, so it also
@@ -2781,10 +3048,8 @@ async function openApps(){
     openSheet('Running apps', `
       <div style="margin-top:12px">${rows ||
         '<div class="srow"><div class="d">Nothing with a window open.</div></div>'}</div>`,
-      `<button class="btn" id="appsBack">Tools</button>
-       <div style="flex-grow:1"></div>
+      `<div style="flex-grow:1"></div>
        <button class="btn" id="appsRefresh">Refresh</button>`);
-    $('#appsBack').addEventListener('click', openTools);
     $('#appsRefresh').addEventListener('click', openApps);
     $('#sheetBody').querySelectorAll('[data-end]').forEach(b =>
       b.addEventListener('click', async () => {
@@ -2803,65 +3068,579 @@ async function openApps(){
 /* A read-only file browser. Tap a folder to go in, tap a file to download it
    to the phone. There is no upload or write path anywhere - the server only
    lists and streams. */
-function fsize(n){
+/* ================= Files =================
+ * The PC's files as their own tab: tap Files in the bar at the bottom and
+ * the browser slides in over the remote. Places and drives first, then
+ * folders you can search and sort, previews of pictures, video, music, PDFs
+ * and text, pick several and download them as one zip, and upload from the
+ * phone into your own folders (Face ID / PIN first). The server decides what
+ * is readable and writable (files.py); this is only the part you see. */
+const FV = {
+  path: '', data: null, list: [], sel: new Set(), selecting: false, q: '',
+  sort: (() => { try { return JSON.parse(localStorage.getItem('aether.fsort')) || { by: 'name', desc: false }; }
+                 catch(e){ return { by: 'name', desc: false }; } })(),
+  seq: 0, searchT: null, pressT: null, view: null,
+};
+const FVI = {
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+  sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h11M4 12h7M4 17h4"/><path d="M18 5v14M15 16l3 3 3-3"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>',
+  remote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>',
+  files: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4.5l2 2.2H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+};
+const FV_PLACE = {
+  desktop: ['#0a84ff', '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'],
+  documents: ['#5e5ce6', '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>'],
+  downloads: ['#30b0c7', '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'],
+  pictures: ['#34c759', '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 8"/>'],
+  videos: ['#ff375f', '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>'],
+  music: ['#ff9f0a', '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>'],
+  home: ['#8e8e93', '<path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/>'],
+};
+const fvEnc = encodeURIComponent;
+
+function fvSize(n){
   if (n == null) return '';
-  const u = ['B','KB','MB','GB','TB'];
-  let i = 0; while (n >= 1024 && i < u.length-1){ n /= 1024; i++; }
+  const u = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0; while (n >= 1000 && i < u.length - 1){ n /= 1000; i++; }
   return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
 }
+function fvDate(t){
+  if (!t) return '';
+  const d = new Date(t * 1000), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return 'Today ' + time;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'Yesterday ' + time;
+  return d.toLocaleDateString([], d.getFullYear() === now.getFullYear()
+    ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+}
+const fvThumbable = e => !e.dir && ['image', 'video', 'pdf', 'audio', 'doc', 'sheet', 'slides'].includes(e.kind);
+const fvThumb = (e, s) => '/api/files/thumb?p=' + fvEnc(e.path) + '&s=' + (s || 160) + '&m=' + (e.mtime || 0);
 
-async function openFiles(path){
+function fvGlyph(e){
+  if (e.dir) return `<svg class="fv-folder" viewBox="0 0 40 32"><path d="M2.5 6.5A3.5 3.5 0 0 1 6 3h8.6c.9 0 1.8.4 2.4 1l2.4 2.4H34A3.5 3.5 0 0 1 37.5 10v16A3.5 3.5 0 0 1 34 29.5H6A3.5 3.5 0 0 1 2.5 26z"/><path class="fv-folder-lid" d="M2.5 11h35v15A3.5 3.5 0 0 1 34 29.5H6A3.5 3.5 0 0 1 2.5 26z"/></svg>`;
+  const ext = (e.name.includes('.') ? e.name.split('.').pop() : '').slice(0, 4).toUpperCase();
+  return `<div class="fv-doc k-${esc(e.kind)}"><span>${esc(ext)}</span></div>`;
+}
+
+function fvSorted(list){
+  const { by, desc } = FV.sort;
+  const f = desc ? -1 : 1;
+  const name = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  return list.slice().sort((a, b) => {
+    if (a.dir !== b.dir) return a.dir ? -1 : 1;           // folders first, always
+    let r = 0;
+    if (by === 'date') r = (a.mtime || 0) - (b.mtime || 0);
+    else if (by === 'size') r = (a.size || 0) - (b.size || 0);
+    else if (by === 'kind') r = (a.kind || '').localeCompare(b.kind || '');
+    return (r || name(a, b)) * f;
+  });
+}
+
+function fvEl(){ return document.getElementById('files'); }
+
+async function fvGo(path, opts){
+  opts = opts || {};
+  const seq = ++FV.seq;
+  const prev = FV.path;
+  FV.path = path || '';
+  FV.q = '';
+  if (!opts.keepSel){ FV.sel.clear(); FV.selecting = false; }
+  const scroller = fvEl().querySelector('.fv-scroll');
+  if (!opts.silent){
+    fvEl().classList.add('loading');
+  }
   let data;
-  try { data = await api('/api/files?p=' + encodeURIComponent(path || '')); }
-  catch(e){ toast(e.message); return; }
+  try { data = await api('/api/files?p=' + fvEnc(FV.path)); }
+  catch(err){ if (seq === FV.seq){ fvEl().classList.remove('loading'); toast(err.message); } return; }
+  if (seq !== FV.seq) return;
+  FV.data = data;
+  FV.list = fvSorted(data.entries || []);
+  fvEl().classList.remove('loading');
+  fvDraw(opts.silent ? null : (path && prev && path.length < prev.length ? 'back' : path !== prev ? 'fwd' : null));
+  if (!opts.silent && scroller) scroller.scrollTop = 0;
+}
 
-  const crumb = data.path
-    ? esc(data.path)
-    : 'Pick a drive or folder';
-  const rows = (data.entries || []).map(en => en.dir
-    ? `<div class="srow" data-dir="${esc(en.path)}" style="cursor:pointer">
-         <div style="flex:0 0 auto">📁</div>
-         <div class="t" style="flex-grow:1;min-width:0;overflow:hidden;
-           text-overflow:ellipsis;white-space:nowrap">${esc(en.name)}</div>
-         <div class="d">›</div>
-       </div>`
-    : `<div class="srow" data-file="${esc(en.path)}" data-name="${esc(en.name)}"
-         style="cursor:pointer">
-         <div style="flex:0 0 auto">📄</div>
-         <div style="flex-grow:1;min-width:0;overflow:hidden">
-           <div class="t" style="overflow:hidden;text-overflow:ellipsis;
-             white-space:nowrap">${esc(en.name)}</div>
-           <div class="d">${fsize(en.size)}</div></div>
-         <div class="d">⬇</div>
-       </div>`).join('');
+async function fvSearch(q){
+  FV.q = q;
+  const seq = ++FV.seq;
+  if (!q){ FV.list = fvSorted((FV.data && FV.data.entries) || []); fvDrawList(); return; }
+  const where = FV.path || ((FV.data && FV.data.places || []).find(p => p.icon === 'home') || {}).path || '';
+  if (!where) return;
+  fvEl().querySelector('.fv-list').innerHTML = '<div class="fv-note">Searching…</div>';
+  try {
+    const r = await api('/api/files?p=' + fvEnc(where) + '&q=' + fvEnc(q));
+    if (seq !== FV.seq) return;
+    FV.list = fvSorted(r.entries || []);
+    FV.searchDone = r.done;
+    fvDrawList();
+  } catch(err){ if (seq === FV.seq) toast(err.message); }
+}
 
-  openSheet('Files', `
-    <div style="font-size:11.5px;color:var(--muted);margin:10px 0;
-      overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${crumb}</div>
-    <div>${rows || '<div class="srow"><div class="d">Empty folder.</div></div>'}</div>
-    ${data.error ? `<div style="color:var(--bad);font-size:12px;margin-top:8px">${esc(data.error)}</div>` : ''}`,
-    `<button class="btn" id="filesUp" ${data.up == null && !data.path ? 'disabled' : ''}>Up</button>
-     <div style="flex-grow:1"></div>
-     <button class="btn" id="filesTools">Tools</button>`);
+function fvCrumbs(p){
+  if (!p) return [];
+  const parts = p.replace(/\\+$/, '').split('\\');
+  const out = [];
+  let acc = '';
+  parts.forEach((x, i) => {
+    acc = i === 0 ? x + '\\' : (acc.endsWith('\\') ? acc : acc + '\\') + x;
+    out.push({ name: i === 0 ? x : x, path: acc });
+  });
+  return out;
+}
 
-  $('#filesUp').addEventListener('click', () => openFiles(data.up || ''));
-  $('#filesTools').addEventListener('click', openTools);
+function fvTitle(){
+  const d = FV.data;
+  if (!FV.path) return 'Files';
+  return (d && d.name) || FV.path;
+}
 
-  $('#sheetBody').querySelectorAll('[data-dir]').forEach(el =>
-    el.addEventListener('click', () => openFiles(el.dataset.dir)));
+function fvDraw(dir){
+  const el = fvEl(), d = FV.data || {};
+  const home = !FV.path;
+  const upName = home ? '' : (d.up ? (d.up.replace(/\\+$/, '').split('\\').pop() || d.up) : 'Files');
+  el.querySelector('.fv-bar').innerHTML = `
+    ${home ? '<span class="fv-bar-sp"></span>' : `<button class="fv-back" data-fv="up">${FVI.back}<span>${esc(upName)}</span></button>`}
+    <span class="grow"></span>
+    ${!home && d.writable ? `<button class="fv-ib" data-fv="upload" aria-label="Upload from this phone">${FVI.up}</button>` : ''}
+    ${!home ? `<button class="fv-txtbtn" data-fv="select">${FV.selecting ? 'Cancel' : 'Select'}</button>` : ''}`;
+  el.querySelector('.fv-title').textContent = fvTitle();
+  const s = el.querySelector('.fv-search input');
+  s.value = FV.q;
+  s.placeholder = home ? 'Search your folders' : 'Search ' + fvTitle();
+  el.querySelector('.fv-crumbs').innerHTML = fvCrumbs(FV.path).map((c, i, a) =>
+    `<button class="fv-crumb ${i === a.length - 1 ? 'on' : ''}" data-go="${esc(c.path)}">${esc(c.name.replace(/\\$/, ''))}</button>`)
+    .join(`<i>${FVI.chev}</i>`);
+  const cr = el.querySelector('.fv-crumbs');
+  cr.scrollLeft = cr.scrollWidth;              // show where you are, not where C: is
+  el.classList.toggle('home', home);
+  fvDrawList();
+  if (dir){
+    const l = el.querySelector('.fv-body');
+    l.classList.remove('in-fwd', 'in-back');
+    void l.offsetWidth;
+    l.classList.add(dir === 'back' ? 'in-back' : 'in-fwd');
+  }
+}
 
-  $('#sheetBody').querySelectorAll('[data-file]').forEach(el =>
-    el.addEventListener('click', () => {
-      // An <a download> is the reliable way to pull a binary on a phone;
-      // navigating the PWA itself would leave the app.
-      const a = document.createElement('a');
-      a.href = '/api/download?p=' + encodeURIComponent(el.dataset.file);
-      a.download = el.dataset.name || '';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      toast('Downloading ' + (el.dataset.name || 'file') + '…');
-    }));
+function fvRow(e, i){
+  const sel = FV.sel.has(e.path);
+  const sub = e.dir ? (e.where !== undefined && FV.q ? (e.where || 'here') : 'Folder')
+                    : [fvSize(e.size), fvDate(e.mtime)].filter(Boolean).join(' · ')
+                      + (FV.q && e.where ? ' · ' + e.where : '');
+  return `<div class="fv-row ${sel ? 'sel' : ''}" data-i="${i}">
+    <div class="fv-check">${FVI.check}</div>
+    <div class="fv-ic">${fvGlyph(e)}${fvThumbable(e)
+      ? `<img loading="lazy" decoding="async" src="${fvThumb(e)}" alt="" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()">` : ''}</div>
+    <div class="fv-meta"><div class="fv-name">${esc(e.name)}</div><div class="fv-sub">${esc(sub)}</div></div>
+    ${e.dir && !FV.selecting ? `<i class="fv-go">${FVI.chev}</i>` : ''}
+  </div>`;
+}
+
+function fvDrawList(){
+  const el = fvEl(), d = FV.data || {};
+  const box = el.querySelector('.fv-list');
+  el.classList.toggle('selecting', FV.selecting);
+  if (!FV.path && !FV.q){
+    const places = (d.places || []).map(p => {
+      const [c, g] = FV_PLACE[p.icon] || FV_PLACE.home;
+      return `<button class="fv-place" data-go="${esc(p.path)}"><span class="fv-pic" style="--c:${c}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${g}</svg></span>
+        <span>${esc(p.name)}</span></button>`;
+    }).join('');
+    const drives = (d.drives || []).map(v => {
+      const used = v.total ? (1 - v.free / v.total) : 0;
+      return `<button class="fv-drive" data-go="${esc(v.path)}">
+        <span class="fv-pic" style="--c:${v.icon === 'usb' ? '#ff9f0a' : v.icon === 'net' ? '#64d2ff' : '#8e8e93'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3" y="7" width="18" height="10" rx="2.5"/><circle cx="16.5" cy="12" r="1" fill="currentColor"/><path d="M6.5 12h5"/></svg></span>
+        <span class="fv-meta"><span class="fv-name">${esc(v.name)} (${esc(v.letter)}:)</span>
+          <span class="fv-usage"><i style="width:${(used * 100).toFixed(1)}%;${used > .9 ? 'background:var(--bad)' : ''}"></i></span>
+          <span class="fv-sub">${fvSize(v.free)} free of ${fvSize(v.total)}</span></span>
+        <i class="fv-go">${FVI.chev}</i></button>`;
+    }).join('');
+    box.innerHTML = `<div class="fv-h">Places</div><div class="fv-places">${places}</div>
+      <div class="fv-h">Drives</div><div class="fv-group">${drives || '<div class="fv-note">No drives found.</div>'}</div>`;
+    fvSelBar();
+    return;
+  }
+  if (d.error && !FV.q){ box.innerHTML = `<div class="fv-note err">${esc(d.error)}</div>`; fvSelBar(); return; }
+  const rows = FV.list.map(fvRow).join('');
+  const nf = FV.list.filter(e => !e.dir).length, nd = FV.list.length - nf;
+  box.innerHTML = rows
+    ? `<div class="fv-group">${rows}</div><div class="fv-foot">${
+        FV.q ? `${FV.list.length} found${FV.searchDone === false ? ' (stopped early - try a narrower folder)' : ''}`
+             : [nd ? nd + ' folder' + (nd === 1 ? '' : 's') : '', nf ? nf + ' file' + (nf === 1 ? '' : 's') : ''].filter(Boolean).join(', ')
+               + (d.capped ? ' (first 5,000)' : '')}</div>`
+    : `<div class="fv-note">${FV.q ? 'Nothing matches “' + esc(FV.q) + '”.' : 'This folder is empty.'}</div>`;
+  fvSelBar();
+}
+
+function fvSelBar(){
+  const bar = fvEl().querySelector('.fv-selbar');
+  if (!FV.selecting){ bar.classList.remove('show'); return; }
+  const picked = FV.list.filter(e => FV.sel.has(e.path));
+  const bytes = picked.reduce((n, e) => n + (e.size || 0), 0);
+  const folders = picked.some(e => e.dir);
+  const all = FV.list.length && picked.length === FV.list.length;
+  bar.innerHTML = `<button class="fv-txtbtn" data-fv="all">${all ? 'None' : 'All'}</button>
+    <div class="fv-selinfo">${picked.length ? picked.length + ' selected' : 'Tap to select'}${
+      picked.length ? `<small>${folders ? 'includes folders' : fvSize(bytes)}</small>` : ''}</div>
+    <button class="fv-dl" data-fv="download" ${picked.length ? '' : 'disabled'}>${FVI.down}<span>Download</span></button>`;
+  bar.classList.add('show');
+}
+
+function fvDownload(entries){
+  if (!entries.length) return;
+  const go = (url, name) => {
+    const a = document.createElement('a');
+    a.href = url; a.download = name || '';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  if (entries.length === 1 && !entries[0].dir){
+    go('/api/download?p=' + fvEnc(entries[0].path), entries[0].name);
+    toast('Downloading ' + entries[0].name);
+    return;
+  }
+  api('/api/files/zip', { paths: entries.map(e => e.path) }).then(r => {
+    go(r.url, r.name);
+    toast('Zipping ' + entries.length + ' item' + (entries.length === 1 ? '' : 's') + ' - ' + r.name);
+  }).catch(err => toast(err.message));
+}
+
+/* ---- the viewer ---- */
+function fvViewEl(){
+  let v = document.getElementById('fvView');
+  if (v) return v;
+  v = document.createElement('div');
+  v.id = 'fvView';
+  v.innerHTML = `<div class="fvv-top"><button class="fvv-ib" data-fvv="close" aria-label="Close">${FVI.x}</button>
+      <div class="fvv-name"><b></b><small></small></div>
+      <button class="fvv-ib" data-fvv="dl" aria-label="Download">${FVI.down}</button></div>
+    <div class="fvv-stage"></div>`;
+  document.body.appendChild(v);
+  v.addEventListener('click', e => {
+    const b = e.target.closest('[data-fvv]');
+    if (!b) return;
+    const a = b.dataset.fvv, cur = FV.view && FV.view.e;
+    if (a === 'close') fvCloseView();
+    if (a === 'dl' && cur) fvDownload([cur]);
+    if (a === 'open' && cur) window.open('/api/files/raw?p=' + fvEnc(cur.path), '_blank');
+  });
+  // Swipe: sideways between pictures, down to close.
+  let st = null;
+  const stage = v.querySelector('.fvv-stage');
+  stage.addEventListener('pointerdown', e => {
+    if (e.target.closest('video,audio,pre,button')) return;
+    st = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId };
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!st || e.pointerId !== st.id) return;
+    const dx = e.clientX - st.x, dy = e.clientY - st.y;
+    const img = stage.querySelector('img.fvv-img');
+    if (img && !img.classList.contains('zoom')) img.style.transform =
+      Math.abs(dy) > Math.abs(dx) && dy > 0 ? `translateY(${dy}px) scale(${1 - Math.min(dy, 400) / 1600})` : `translateX(${dx}px)`;
+  });
+  const end = e => {
+    if (!st || e.pointerId !== st.id) return;
+    const dx = e.clientX - st.x, dy = e.clientY - st.y, quick = Date.now() - st.t < 280;
+    st = null;
+    const img = stage.querySelector('img.fvv-img');
+    if (img && !img.classList.contains('zoom')) img.style.transform = '';
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8){
+      if (img && e.type === 'pointerup'){
+        const now = Date.now();
+        if (now - (FV.lastTap || 0) < 300){ img.classList.toggle('zoom'); FV.lastTap = 0; }
+        else FV.lastTap = now;
+      }
+      return;
+    }
+    if (img && img.classList.contains('zoom')) return;
+    if (dy > 110 && Math.abs(dy) > Math.abs(dx)) return fvCloseView();
+    if (Math.abs(dx) > 70 || (quick && Math.abs(dx) > 30)) fvStep(dx < 0 ? 1 : -1);
+  };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+  return v;
+}
+
+function fvStep(d){
+  if (!FV.view) return;
+  const pics = FV.list.filter(e => e.kind === 'image');
+  const i = pics.findIndex(e => e.path === FV.view.e.path);
+  if (i < 0) return;
+  const n = pics[i + d];
+  if (n) fvOpen(n, d > 0 ? 'l' : 'r');
+}
+
+async function fvOpen(e, from){
+  const v = fvViewEl(), stage = v.querySelector('.fvv-stage');
+  FV.view = { e };
+  v.querySelector('.fvv-name b').textContent = e.name;
+  const pics = FV.list.filter(x => x.kind === 'image');
+  const pi = pics.findIndex(x => x.path === e.path);
+  v.querySelector('.fvv-name small').textContent = e.kind === 'image' && pics.length > 1
+    ? `${pi + 1} of ${pics.length}` : [fvSize(e.size), fvDate(e.mtime)].filter(Boolean).join(' · ');
+  const raw = '/api/files/raw?p=' + fvEnc(e.path);
+  const ext = (e.name.split('.').pop() || '').toLowerCase();
+  const playable = ['mp4', 'm4v', 'mov', 'webm', 'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'].includes(ext);
+  const info = (msg) => `<div class="fvv-info">${fvThumbable(e)
+      ? `<img class="fvv-poster" src="${fvThumb(e, 480)}" alt="" onerror="this.remove()">` : `<div class="fvv-big">${fvGlyph(e)}</div>`}
+      <b>${esc(e.name)}</b><span>${esc([fvSize(e.size), fvDate(e.mtime)].filter(Boolean).join(' · '))}</span>
+      ${msg ? `<small>${msg}</small>` : ''}
+      <div class="fvv-acts">${e.kind === 'pdf' ? `<button class="fvv-btn" data-fvv="open">${FVI.open}Open</button>` : ''}
+        <button class="fvv-btn pri" data-fvv="dl">${FVI.down}Download</button></div></div>`;
+  if (e.kind === 'image'){
+    stage.innerHTML = `<img class="fvv-img ${from ? 'from-' + from : ''}" src="/api/files/view?p=${fvEnc(e.path)}&m=${e.mtime || 0}" alt="">`;
+    // Warm the neighbours so a swipe is instant.
+    [pics[pi - 1], pics[pi + 1]].forEach(n => { if (n) (new Image()).src = '/api/files/view?p=' + fvEnc(n.path) + '&m=' + (n.mtime || 0); });
+  } else if (e.kind === 'video' && playable){
+    stage.innerHTML = `<video class="fvv-media" src="${raw}" controls playsinline autoplay preload="metadata"></video>`;
+  } else if (e.kind === 'audio' && playable){
+    stage.innerHTML = info('') ;
+    stage.querySelector('.fvv-acts').insertAdjacentHTML('beforebegin', `<audio class="fvv-audio" src="${raw}" controls autoplay></audio>`);
+  } else if (e.kind === 'text'){
+    stage.innerHTML = '<div class="fv-note">Loading…</div>';
+    try {
+      const t = await api('/api/files/text?p=' + fvEnc(e.path));
+      if (FV.view.e !== e) return;
+      if (t.binary){ stage.innerHTML = info("This doesn't look like text."); }
+      else {
+        stage.innerHTML = `<pre class="fvv-text"></pre>${t.truncated ? '<div class="fv-note">Showing the first 256 KB - download it for the rest.</div>' : ''}`;
+        stage.querySelector('pre').textContent = t.text;     // text, never HTML
+      }
+    } catch(err){ stage.innerHTML = info(esc(err.message)); }
+  } else {
+    stage.innerHTML = info(e.kind === 'video' || e.kind === 'audio'
+      ? "Phones can't play this format - download it and open it in an app like VLC." : '');
+  }
+  v.classList.add('show');
+}
+
+function fvCloseView(){
+  const v = document.getElementById('fvView');
+  if (!v) return;
+  v.classList.remove('show');
+  FV.view = null;
+  setTimeout(() => { if (!FV.view) v.querySelector('.fvv-stage').innerHTML = ''; }, 300);   // stops video
+}
+
+/* ---- uploads ---- */
+function fvPickUpload(){
+  let inp = document.getElementById('fvPick');
+  if (!inp){
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.multiple = true; inp.id = 'fvPick'; inp.hidden = true;
+    document.body.appendChild(inp);
+    inp.addEventListener('change', () => { const fl = [...inp.files]; inp.value = ''; if (fl.length) fvUpload(fl); });
+  }
+  inp.click();
+}
+
+async function fvUpload(list){
+  const dir = FV.path, name = fvTitle();
+  const total = list.reduce((n, f) => n + f.size, 0);
+  let ticket;
+  try { ticket = (await api('/api/files/upload/begin', { dir })).ticket; }
+  catch(err){ if (err.message !== 'Cancelled') toast(err.message); return; }
+  let cancelled = false, xhr = null, done = 0;
+  const up = [];
+  openSheet('Uploading to ' + name, `<div class="fvu">
+      <div class="fvu-line"><span id="fvuNow"></span><span id="fvuPct">0%</span></div>
+      <div class="fvu-bar"><i id="fvuBar"></i></div>
+      <div class="fvu-sub" id="fvuSub">${list.length} file${list.length === 1 ? '' : 's'} · ${fvSize(total)}</div></div>`,
+    `<div style="flex-grow:1"></div><button class="btn" id="fvuStop">Stop</button>`);
+  $('#fvuStop').onclick = () => { cancelled = true; if (xhr) xhr.abort(); closeSheet(); };
+  for (const [i, f] of list.entries()){
+    if (cancelled) break;
+    const now = $('#fvuNow');
+    if (now) now.textContent = (list.length > 1 ? `${i + 1} of ${list.length}: ` : '') + f.name;
+    const ok = await new Promise(res => {
+      xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/files/upload?t=' + fvEnc(ticket) + '&name=' + fvEnc(f.name));
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = ev => {
+        const pct = Math.round((done + ev.loaded) / Math.max(1, total) * 100);
+        const b = $('#fvuBar'), p = $('#fvuPct');
+        if (b) b.style.width = pct + '%';
+        if (p) p.textContent = pct + '%';
+      };
+      xhr.onload = () => {
+        let j = {}; try { j = JSON.parse(xhr.responseText); } catch(e){}
+        if (xhr.status === 200){ up.push(j.name); res(true); }
+        else { toast(f.name + ': ' + (j.error || 'failed')); res(false); }
+      };
+      xhr.onerror = xhr.onabort = () => res(false);
+      xhr.send(f);
+    });
+    done += f.size;
+    if (!ok && !cancelled && list.length > 1) continue;
+  }
+  if (!cancelled) closeSheet();
+  if (up.length){
+    if (navigator.vibrate) navigator.vibrate(12);
+    toast(`Uploaded ${up.length} file${up.length === 1 ? '' : 's'} to ${name}`);
+    if (FV.path === dir){
+      await fvGo(dir, { silent: true });
+      up.forEach(n => {
+        const i = FV.list.findIndex(e => e.name === n);
+        const r = i >= 0 && fvEl().querySelector(`.fv-row[data-i="${i}"]`);
+        if (r) r.classList.add('fresh');
+      });
+    }
+  }
+}
+
+function fvSortSheet(){
+  const opts = [['name', 'Name'], ['date', 'Date modified'], ['size', 'Size'], ['kind', 'Kind']];
+  openSheet('Sort by', `<div style="margin-top:8px">${opts.map(([k, l]) => `
+      <div class="srow" data-sort="${k}" style="cursor:pointer"><div class="t" style="flex-grow:1">${l}</div>
+        ${FV.sort.by === k ? `<div style="color:var(--accent2);font-size:13px">${FV.sort.desc
+          ? (k === 'name' || k === 'kind' ? 'Z–A' : k === 'date' ? 'Newest' : 'Largest')
+          : (k === 'name' || k === 'kind' ? 'A–Z' : k === 'date' ? 'Oldest' : 'Smallest')} ✓</div>` : ''}</div>`).join('')}
+    <div class="d" style="font-size:12px;color:var(--muted);margin:10px 2px">Tap the same one again to flip the order. Folders always come first.</div></div>`,
+    `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
+  $('#sheetBody').querySelectorAll('[data-sort]').forEach(r => r.addEventListener('click', () => {
+    const k = r.dataset.sort;
+    FV.sort = FV.sort.by === k ? { by: k, desc: !FV.sort.desc } : { by: k, desc: k === 'date' || k === 'size' };
+    try { localStorage.setItem('aether.fsort', JSON.stringify(FV.sort)); } catch(e){}
+    FV.list = fvSorted(FV.list);
+    fvDrawList();
+    fvSortSheet();
+  }));
+  const c = $('#sheetClose'); if (c) c.onclick = closeSheet;
+}
+
+/* ---- wiring ---- */
+function fvBuild(){
+  const el = document.createElement('div');
+  el.id = 'files';
+  el.innerHTML = `<div class="fv-scroll">
+      <div class="fv-head">
+        <div class="fv-bar"></div>
+        <h1 class="fv-title">Files</h1>
+        <div class="fv-searchrow">
+          <label class="fv-search">${FVI.search}<input type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <button class="fv-ib" data-fv="sort" aria-label="Sort">${FVI.sort}</button>
+        </div>
+        <div class="fv-crumbs"></div>
+      </div>
+      <div class="fv-body"><div class="fv-list"></div></div>
+    </div>
+    <div class="fv-selbar"></div>`;
+  document.body.appendChild(el);
+
+  const inp = el.querySelector('.fv-search input');
+  inp.addEventListener('input', () => {
+    clearTimeout(FV.searchT);
+    const q = inp.value.trim();
+    FV.searchT = setTimeout(() => fvSearch(q), q ? 350 : 0);
+  });
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ clearTimeout(FV.searchT); fvSearch(inp.value.trim()); inp.blur(); } });
+
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-fv]');
+    if (b){
+      const a = b.dataset.fv;
+      if (a === 'up') fvGo(FV.data && FV.data.up ? FV.data.up : '');
+      if (a === 'select'){ FV.selecting = !FV.selecting; FV.sel.clear(); fvDraw(); }
+      if (a === 'all'){
+        const all = FV.sel.size === FV.list.length;
+        FV.sel = new Set(all ? [] : FV.list.map(x => x.path)); fvDrawList();
+      }
+      if (a === 'download') fvDownload(FV.list.filter(x => FV.sel.has(x.path)));
+      if (a === 'upload') fvPickUpload();
+      if (a === 'sort') fvSortSheet();
+      return;
+    }
+    const go = e.target.closest('[data-go]');
+    if (go){ fvGo(go.dataset.go); return; }
+    const row = e.target.closest('.fv-row');
+    if (!row || Date.now() < (FV.pressedAt || 0)) return;
+    const en = FV.list[+row.dataset.i];
+    if (!en) return;
+    if (FV.selecting){
+      FV.sel.has(en.path) ? FV.sel.delete(en.path) : FV.sel.add(en.path);
+      row.classList.toggle('sel', FV.sel.has(en.path));
+      fvSelBar();
+      return;
+    }
+    if (en.dir) fvGo(en.path); else fvOpen(en);
+  });
+
+  // Hold a row to start selecting, like Photos / Files on the phone.
+  el.addEventListener('pointerdown', e => {
+    const row = e.target.closest('.fv-row');
+    if (!row || FV.selecting) return;
+    const x = e.clientX, y = e.clientY;
+    clearTimeout(FV.pressT);
+    FV.pressT = setTimeout(() => {
+      const en = FV.list[+row.dataset.i];
+      if (!en) return;
+      FV.selecting = true; FV.sel = new Set([en.path]);
+      FV.pressedAt = Date.now() + 500;          // swallow the click that follows
+      if (navigator.vibrate) navigator.vibrate(12);
+      fvDraw();
+    }, 520);
+    FV.press = { x, y };
+  });
+  el.addEventListener('pointermove', e => {
+    if (FV.press && Math.hypot(e.clientX - FV.press.x, e.clientY - FV.press.y) > 10){
+      clearTimeout(FV.pressT); FV.press = null;
+    }
+  });
+  ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, () => { clearTimeout(FV.pressT); FV.press = null; }));
+  el.addEventListener('contextmenu', e => { if (e.target.closest('.fv-row')) e.preventDefault(); });
+
+  // Edge-swipe right = back up a folder, the iOS gesture.
+  let sw = null;
+  el.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    sw = t.clientX < 28 && FV.path ? { x: t.clientX, y: t.clientY } : null;
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    if (!sw) return;
+    const t = e.changedTouches[0];
+    if (t.clientX - sw.x > 80 && Math.abs(t.clientY - sw.y) < 60) fvGo(FV.data && FV.data.up ? FV.data.up : '');
+    sw = null;
+  }, { passive: true });
+  return el;
+}
+
+/* The tab bar: Remote | Files. PCs only - the homelab has no files to show. */
+function showTab(which){
+  const files = which === 'files';
+  if (files && !fvEl()) fvBuild();
+  if (files && !FV.data) fvGo('');
+  document.body.classList.toggle('filesOn', files);
+  const f = fvEl();
+  if (f) f.classList.toggle('show', files);
+  document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === which));
+  if (!files) fvCloseView();
+}
+
+function setupTabs(){
+  if (!isPC() || document.getElementById('tabs')) return;
+  const t = document.createElement('nav');
+  t.id = 'tabs';
+  t.innerHTML = `<button data-tab="remote" class="on">${FVI.remote}<span>Remote</span></button>
+    <button data-tab="files">${FVI.files}<span>Files</span></button>`;
+  document.body.appendChild(t);
+  document.body.classList.add('hastabs');
+  t.addEventListener('click', e => {
+    const b = e.target.closest('[data-tab]');
+    if (!b) return;
+    if (b.dataset.tab === 'files' && document.body.classList.contains('filesOn') && FV.path){
+      fvGo('');                                     // tap Files again = back to the top
+      return;
+    }
+    showTab(b.dataset.tab);
+  });
 }
 
 /* ================= boot ================= */
@@ -2878,6 +3657,7 @@ async function poll(){
     // The alias (if you set one) wins over the machine's hostname here too.
     $('#meta').textContent = S.time + ' · ' + pcsCurrentName(S.device);
     refresh();          // in place - never a full rebuild, or it flickers
+    if (NP.open) npFullDraw();
   } catch(e){ $('#dot').className = 'dot off'; }
 }
 
@@ -2885,6 +3665,7 @@ async function poll(){
   sizeGrid();
   await sfOnLaunch();          // Face ID / PIN first, when it's set up
   await loadPlatform();
+  setupTabs();
   try {
     await loadLayout();
     S = await api('/api/state');

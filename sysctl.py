@@ -563,6 +563,15 @@ def get_clipboard_text():
         user32.CloseClipboard()
 
 
+def clipboard_seq():
+    """Goes up every time anything on the PC copies - how "Copy" knows the
+    app has actually put the new text there."""
+    try:
+        return int(user32.GetClipboardSequenceNumber())
+    except Exception:
+        return 0
+
+
 def set_clipboard_text(text):
     text = str(text)
     if not _open_clipboard():

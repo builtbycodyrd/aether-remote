@@ -35,7 +35,11 @@ if os.path.isdir(static):
 hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
-    "update", "wol", "tls", "secondfactor", "webauthn",
+    "update", "wol", "tls", "secondfactor", "webauthn", "media", "files",
+    # Now Playing reads Windows' media controls through these (WinRT).
+    "winrt.runtime", "winrt.system", "winrt.windows.foundation",
+    "winrt.windows.foundation.collections", "winrt.windows.media.control",
+    "winrt.windows.storage.streams",
     # passkey (Face ID) signature checks
     "cryptography.hazmat.primitives.asymmetric.ec",
     "cryptography.hazmat.primitives.asymmetric.rsa",

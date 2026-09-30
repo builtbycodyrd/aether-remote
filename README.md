@@ -32,12 +32,23 @@ From then on your phone has a grid of tiles you arrange yourself:
   pins the level — for games that yank it to 100% on launch.
 - **Your library, found automatically.** It scans Steam, Epic, Xbox and the
   Start Menu and pulls in the real box art, the way a console does.
+- **Now Playing, live.** Whatever Windows shows in its media box — Spotify,
+  a YouTube tab, a game launcher — with the artwork, the app's icon, a
+  moving progress bar you can scrub, and the buttons. The tile takes on the
+  artwork's colours; tap it for a full-screen player with the PC's volume.
+- **Your PC's files, in their own tab.** Places and drives, search, sort,
+  thumbnails, previews of photos, video, music, PDFs and text. Pick several
+  and download them as one zip, or upload from the phone into your own
+  folders (it asks for Face ID / your PIN first).
 - **Media and power keys** — play/pause, skip, lock, sleep, screen off.
 - **The whole desktop, live and usable.** Full screen, tap to click, hold to
   right-click, two fingers to scroll. Tap the box at the bottom and your
   phone's own keyboard types straight into whatever is focused on the PC —
-  search something, press Enter, done. A toolbar covers what a phone keyboard
-  has no key for: Esc, Tab, Copy, Paste, the arrows, Win, Alt+Tab.
+  search something, press Enter, done. **Copy** puts whatever is selected on
+  the PC onto your phone's clipboard, and **Paste** sends your phone's
+  clipboard to the PC — the same as copying between apps on the phone. The
+  toolbar covers the rest a phone keyboard has no key for: Esc, Tab, the
+  arrows, Win, Alt+Tab.
 - **Built by you.** Drag tiles around, resize them, group them into sections,
   and recolour the whole app from two hex values.
 
@@ -241,6 +252,7 @@ Add-ons are versioned separately from the Windows app (tags like
 git clone https://github.com/builtbycodyrd/aether-remote.git
 cd aether-remote
 pip install pillow qrcode cryptography
+pip install winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
 
 python launch.py --server        # the HTTP server
 python launch.py                 # the tray app
@@ -254,8 +266,10 @@ pip install pyinstaller
 pyinstaller --noconfirm AetherRemote.spec
 ```
 
-Only two third-party dependencies — Pillow and qrcode. Everything else is the
-standard library or raw `ctypes`.
+A handful of third-party dependencies — Pillow, qrcode, cryptography (for
+passkeys) and the `winrt` projection (Now Playing reads Windows' media
+controls through it; without it the tile falls back to title-only).
+Everything else is the standard library or raw `ctypes`.
 
 ### Where things live
 
@@ -265,7 +279,9 @@ standard library or raw `ctypes`.
 | `paths.py` | the rule for what is *program* and what is *your data* |
 | `remote.py` | the HTTP server and every API route |
 | `auth.py` | TOTP and session cookies |
-| `sysctl.py` | volume, media keys, power, the volume lock |
+| `sysctl.py` | volume, media keys, power, the volume lock, the clipboard |
+| `media.py` | Now Playing: the live session, artwork, colours, controls |
+| `files.py` | the Files tab, and the rules for what it may read and write |
 | `stream.py` | screen capture and input injection |
 | `library.py` | finding your games and their artwork |
 | `layout.py` | the tile model, the theme, icon extraction |

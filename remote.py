@@ -15,6 +15,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -45,6 +46,8 @@ import tls      # noqa: E402
 import ssl      # noqa: E402
 import secondfactor   # noqa: E402
 import version        # noqa: E402
+import media          # noqa: E402
+import files          # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -638,14 +641,73 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/art":
                 return self._art(qs.get("id", [""])[0])
 
+            if path == "/api/np/art":
+                # Artwork of what's playing - re-encoded by us, served by hash.
+                got = media.art(qs.get("v", [""])[0])
+                if not got:
+                    return self._send(404, {"error": "no art"})
+                return self._send(200, got[0], got[1],
+                                  {"Cache-Control": "private, max-age=86400"})
+
+            if path == "/api/np/icon":
+                ip = media.icon(qs.get("v", [""])[0])
+                if not ip or not os.path.isfile(ip):
+                    return self._send(404, {"error": "no icon"})
+                with open(ip, "rb") as f:
+                    data = f.read()
+                return self._send(200, data, "image/png",
+                                  {"Cache-Control": "private, max-age=86400"})
+
             if path == "/api/browse":
                 return self._send(200, self._browse(qs.get("p", [""])[0]))
 
             if path == "/api/files":
-                return self._send(200, self._files(qs.get("p", [""])[0]))
+                q = (qs.get("q", [""])[0] or "").strip()
+                p = qs.get("p", [""])[0]
+                if q:
+                    return self._send(200, files.search(p, q[:100]))
+                return self._send(200, files.listing(p))
 
             if path == "/api/download":
                 return self._download(qs.get("p", [""])[0])
+
+            if path == "/api/files/thumb":
+                try:
+                    size = int(qs.get("s", ["240"])[0])
+                except ValueError:
+                    size = 240
+                data = files.thumbnail(os.path.abspath(qs.get("p", [""])[0]), size)
+                if not data:
+                    return self._send(404, {"error": "no thumbnail"})
+                return self._send(200, data, "image/jpeg",
+                                  {"Cache-Control": "private, max-age=604800"})
+
+            if path == "/api/files/view":
+                data = files.view_image(os.path.abspath(qs.get("p", [""])[0]))
+                if not data:
+                    return self._send(404, {"error": "can't show that picture"})
+                return self._send(200, data, "image/jpeg",
+                                  {"Cache-Control": "private, max-age=3600"})
+
+            if path == "/api/files/text":
+                fp = os.path.abspath(qs.get("p", [""])[0])
+                t = files.text_preview(fp)
+                if t is None:
+                    return self._send(404, {"error": "no such file"})
+                return self._send(200, t)
+
+            if path == "/api/files/raw":
+                fp = os.path.abspath(qs.get("p", [""])[0])
+                ctype = files.INLINE_TYPES.get(os.path.splitext(fp)[1].lower())
+                if not ctype:
+                    return self._send(415, {"error": "not something the phone can play"})
+                return self._serve_file(fp, ctype, inline=True)
+
+            if path == "/api/files/zip":
+                items = files.take_zip(qs.get("t", [""])[0])
+                if not items:
+                    return self._send(410, {"error": "that download link has expired"})
+                return self._zip(items, qs.get("n", ["files.zip"])[0])
 
             if path == "/api/update":
                 # Cached: the page polls this, GitHub does not need to hear
@@ -682,6 +744,8 @@ class Handler(BaseHTTPRequestHandler):
         # so forget the previous request's body, then drain this one now - a
         # refusal below must not leave bytes behind to desync the next request.
         self.__dict__.pop("_parsed_body", None)
+        if path == "/api/files/upload":
+            return self._upload(qs)     # a raw file, not JSON - see _upload
         self._body()
 
         # The wizard posts before any session exists - same two guards as the
@@ -744,6 +808,59 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/update/install":
                 return self._update_install()
 
+            if path == "/api/files/zip":
+                items = b.get("paths") or []
+                if not isinstance(items, list):
+                    return self._send(400, {"error": "bad selection"})
+                try:
+                    tok, name = files.prepare_zip(items)
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                return self._send(200, {"url": "/api/files/zip?t=%s&n=%s"
+                                        % (tok, quote(name)), "name": name})
+
+            if path == "/api/files/upload/begin":
+                folder = os.path.abspath(str(b.get("dir", "")))
+                if not files.writable_dir(folder):
+                    return self._send(400, {"error": "Uploads can only go into your own "
+                                            "folders (not AppData) or a non-system drive."})
+                if self._stepup("upload", b):
+                    return
+                tok = files.upload_ticket(folder, self._cookie("rs"))
+                return self._send(200, {"ticket": tok, "dir": folder})
+
+            if path == "/api/clipboard/copy":
+                # The desktop view's Copy: Ctrl+C on the PC, wait for the app
+                # to actually put something on the clipboard, hand it back
+                # for the phone's own clipboard. Text only, never logged.
+                before = sysctl.clipboard_seq()
+                stream.press("c", ["ctrl"])
+                t0 = time.time()
+                while time.time() - t0 < 1.5 and sysctl.clipboard_seq() == before:
+                    time.sleep(0.05)
+                changed = sysctl.clipboard_seq() != before
+                if changed:
+                    time.sleep(0.05)       # some apps set several formats
+                txt = sysctl.get_clipboard_text()
+                if txt is None:
+                    return self._send(409, {"error": "Couldn't read the PC clipboard - is the PC locked?"})
+                return self._send(200, {"text": txt[:100000], "changed": changed,
+                                        "truncated": len(txt) > 100000})
+
+            if path == "/api/clipboard/paste":
+                # The desktop view's Paste: the phone's clipboard becomes the
+                # PC's, then Ctrl+V. Text only, capped, never logged.
+                text = str(b.get("text", ""))[:100000]
+                if not text:
+                    return self._send(400, {"error": "nothing to paste"})
+                # Phones end lines with \n; Windows apps expect \r\n.
+                text = re.sub(r"\r?\n", "\r\n", text)
+                if not sysctl.set_clipboard_text(text):
+                    return self._send(409, {"error": "Couldn't reach the PC clipboard - is the PC locked?"})
+                time.sleep(0.05)
+                stream.press("v", ["ctrl"])
+                return self._send(200, {"ok": True, "chars": len(text)})
+
             if path == "/api/clipboard":
                 # Text only, capped, not logged. Whatever the phone sends
                 # replaces the PC clipboard.
@@ -751,6 +868,22 @@ class Handler(BaseHTTPRequestHandler):
                 okset = sysctl.set_clipboard_text(text)
                 return self._send(200 if okset else 500,
                                   {"ok": okset, "chars": len(text)})
+
+            if path == "/api/media":
+                # Now playing's own buttons: they drive the session shown on
+                # the tile, not whatever the media keys happen to reach.
+                pos = b.get("pos")
+                try:
+                    pos = float(pos) if pos is not None else None
+                except (TypeError, ValueError):
+                    return self._send(400, {"error": "bad position"})
+                if b.get("op") == "seek" and pos is None:
+                    return self._send(400, {"error": "no position"})
+                ok, err = media.command(str(b.get("op", "")), pos)
+                if not ok:
+                    return self._send(400, {"ok": False, "error": err})
+                return self._send(200, {"ok": True,
+                                        "nowplaying": media.refresh_now(1.5)})
 
             if path == "/api/endtask":
                 r = sysctl.end_task(b.get("pid"))
@@ -1157,7 +1290,14 @@ class Handler(BaseHTTPRequestHandler):
             if not spec:
                 return self._send(400, {"error": "unknown action"})
             if spec["kind"] == "key":
-                sysctl.tap_key(ref.split(".", 1)[1])
+                key = ref.split(".", 1)[1]
+                # Media buttons go to the session Now Playing shows, when
+                # there is one; the media keys are the fallback.
+                op = {"playpause": "toggle", "next": "next",
+                      "prev": "prev"}.get(key)
+                if not (op and ref.startswith("media.") and
+                        media.now_playing() and media.command(op)[0]):
+                    sysctl.tap_key(key)
             elif spec["kind"] == "screenoff":
                 sysctl.screen_off()
             elif spec["kind"] == "power":
@@ -1344,80 +1484,129 @@ class Handler(BaseHTTPRequestHandler):
         return {"path": p, "up": os.path.dirname(p) or None,
                 "entries": entries[:600]}
 
-    def _files(self, p):
-        """Directory listing for the phone's Files tab: folders and ALL files
-        with their sizes. Download-only - there is no write path anywhere."""
-        if not p:
-            roots = []
-            for d in ("C:\\", "D:\\", "E:\\"):
-                if os.path.isdir(d):
-                    roots.append({"name": d, "path": d, "dir": True})
-            for name in ("Desktop", "Downloads", "Documents", "Pictures",
-                         "Videos", "Music"):
-                d = os.path.join(os.environ.get("USERPROFILE", ""), name)
-                if os.path.isdir(d):
-                    roots.append({"name": name, "path": d, "dir": True})
-            return {"path": "", "up": None, "entries": roots}
-
-        p = os.path.abspath(p)
-        if not os.path.isdir(p):
-            return {"path": p, "up": os.path.dirname(p) or None, "entries": []}
-
-        dirs, files = [], []
-        try:
-            for name in sorted(os.listdir(p), key=str.lower):
-                full = os.path.join(p, name)
-                try:
-                    if os.path.isdir(full):
-                        if name.startswith("$"):
-                            continue
-                        dirs.append({"name": name, "path": full, "dir": True})
-                    elif os.path.isfile(full):
-                        files.append({"name": name, "path": full, "dir": False,
-                                      "size": os.path.getsize(full)})
-                except OSError:
-                    continue
-        except PermissionError:
-            return {"path": p, "up": os.path.dirname(p) or None, "entries": [],
-                    "error": "no permission to read that folder"}
-        return {"path": p, "up": os.path.dirname(p) or None,
-                "entries": (dirs + files)[:1500]}
-
     def _download(self, p):
-        """Stream one file to the phone as an attachment. Read-only, and the
-        only thing it can do is hand back bytes that already exist on disk."""
-        p = os.path.abspath(p)
-        if not os.path.isfile(p):
+        """One file, as an attachment. Nothing of this app's own (its login
+        secret, keys) and nothing in the assistant's folder."""
+        return self._serve_file(os.path.abspath(p), "application/octet-stream",
+                                inline=False)
+
+    def _serve_file(self, p, ctype, inline):
+        """Stream a file, honouring Range (iPhones won't play video without
+        it). Inline ones get a sandbox CSP - they're media, never pages."""
+        if not os.path.isfile(p) or not files.readable(p):
             return self._send(404, {"error": "no such file"})
         try:
             size = os.path.getsize(p)
             f = open(p, "rb")
         except OSError as e:
             return self._send(403, {"error": str(e)})
-
+        start, end, partial = 0, size - 1, False
+        rng = self.headers.get("Range") or ""
+        m = re.match(r"^bytes=(\d*)-(\d*)$", rng.strip())
+        if m and size and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            else:                                   # the last N bytes
+                start = max(0, size - int(m.group(2)))
+            if start > end or start >= size:
+                f.close()
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */%d" % size)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            partial = True
         name = os.path.basename(p)
-        ascii_name = name.encode("ascii", "replace").decode("ascii") \
-            .replace('"', "")
-        disp = ("attachment; filename=\"%s\"; filename*=UTF-8''%s"
-                % (ascii_name, quote(name)))
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(size))
+        ascii_name = name.encode("ascii", "replace").decode("ascii").replace('"', "")
+        disp = ("%s; filename=\"%s\"; filename*=UTF-8''%s"
+                % ("inline" if inline else "attachment", ascii_name, quote(name)))
+        length = end - start + 1 if size else 0
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
         self.send_header("Content-Disposition", disp)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+        self.send_header("Cache-Control", "private, no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
         self.end_headers()
+        sent = 0
         try:
             with f:
-                while True:
-                    chunk = f.read(262144)
+                f.seek(start)
+                left = length
+                while left > 0:
+                    chunk = f.read(min(262144, left))
                     if not chunk:
                         break
                     self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        log("download %s (%d bytes)" % (name, size))
+                    left -= len(chunk)
+                    sent += len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+        if not inline and not partial:
+            log("download %s (%d bytes)" % (name, size))
         return None
+
+    def _zip(self, items, name):
+        """Several files (or folders) as one zip, streamed as it's built - no
+        temp file, no waiting for a 10 GB zip before the first byte."""
+        name = re.sub(r'[\\/:*?"<>|\r\n]', "_", name)[:120] or "files.zip"
+        if not name.lower().endswith(".zip"):
+            name += ".zip"
+        ascii_name = name.encode("ascii", "replace").decode("ascii")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition",
+                         "attachment; filename=\"%s\"; filename*=UTF-8''%s"
+                         % (ascii_name, quote(name)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # No length up front, so the end of the zip is the end of the connection.
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            n = files.stream_zip(items, self.wfile)
+            log("download zip of %d item(s) (%d bytes)" % (len(items), n))
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        return None
+
+    def _upload(self, qs):
+        """A raw file body from the phone. Handled before the usual JSON body
+        read (which caps at 1 MB), and only with a ticket from
+        /api/files/upload/begin - which is where Face ID / the PIN is asked."""
+        try:
+            n = int(self.headers.get("Content-Length") or -1)
+        except ValueError:
+            n = -1
+
+        def refuse(code, msg):
+            self.close_connection = True     # the body stays unread: hang up
+            return self._send(code, {"error": msg})
+
+        if not self._authed():
+            return refuse(401, "not logged in")
+        if not self._unlocked():
+            return refuse(403, "locked")
+        folder = files.check_ticket(qs.get("t", [""])[0], self._cookie("rs"))
+        if not folder:
+            return refuse(403, "The upload wasn't approved (or took too long) - try again.")
+        if n < 0:
+            return refuse(411, "no length")
+        try:
+            used = files.receive(folder, qs.get("name", [""])[0], n, self.rfile)
+        except (ValueError, PermissionError) as e:
+            return refuse(400, str(e))
+        except (ConnectionError, OSError) as e:
+            return refuse(500, "upload failed: %s" % e)
+        log("upload %s (%d bytes) into %s" % (used, n, folder))
+        return self._send(200, {"ok": True, "name": used,
+                                "path": os.path.join(folder, used)})
 
     def _addapp(self, b):
         """Turn a browsed .exe into a library entry so a tile can use it."""
@@ -1471,11 +1660,11 @@ class Handler(BaseHTTPRequestHandler):
         want = "".join(c for c in (name or "").lower() if c.isalnum())
         best, best_score = "", -1
         base_depth = root.rstrip("\\/").count(os.sep)
-        for dirpath, dirs, files in os.walk(root):
+        for dirpath, dirs, fnames in os.walk(root):
             if dirpath.count(os.sep) - base_depth > 3:
                 dirs[:] = []
                 continue
-            for fn in files:
+            for fn in fnames:
                 if not fn.lower().endswith(".exe"):
                     continue
                 low = fn.lower()
@@ -1703,7 +1892,7 @@ class Handler(BaseHTTPRequestHandler):
         st["keeper"] = sysctl.keeper.info()
         st["memory"] = sysctl.memory_info()
         st["stats"] = sysctl.system_stats()
-        st["nowplaying"] = sysctl.now_playing()
+        st["nowplaying"] = media.now_playing()
         st["foreground"] = sysctl.foreground_app()
         st["devices"] = sysctl.devices()["devices"]
         st["launchers"] = [{"id": l["id"], "label": l["label"],
