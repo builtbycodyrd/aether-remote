@@ -578,11 +578,19 @@ const NPI = {
   next: '<svg viewBox="0 0 24 24"><path d="M16.3 5h2.2v14h-2.2zM4 6v12a1 1 0 0 0 1.6.8l8.6-6a1 1 0 0 0 0-1.6l-8.6-6A1 1 0 0 0 4 6z"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M7 4.9v14.2a1.1 1.1 0 0 0 1.7.9l11-7.1a1.1 1.1 0 0 0 0-1.8l-11-7.1A1.1 1.1 0 0 0 7 4.9z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.6" height="16" rx="1.3"/><rect x="13.9" y="4" width="4.6" height="16" rx="1.3"/></svg>',
+  pad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12a4 4 0 0 1 3.9 4.9l-.9 4a2.5 2.5 0 0 1-4.3 1.1L14.5 16h-5l-2.2 2a2.5 2.5 0 0 1-4.3-1.1l-.9-4A4 4 0 0 1 6 8z"/><path d="M8 11v3M6.5 12.5h3M15.5 12h.01M17.5 13.5h.01"/></svg>',
   note: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   volLo: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h3.5L12 5v14l-4.5-4H4z"/></svg>',
   volHi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9h3.5L12 5v14l-4.5-4H4z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
 };
+
+/* The line under the title: artist / show - or, for a game, when you started. */
+function npSub(n){
+  if (n.kind === 'game') return 'Started ' + new Date(Date.now() - npPos(n) * 1000)
+    .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return n.artist || n.album || n.appName || '';
+}
 
 function npNow(){
   const n = S && S.nowplaying;
@@ -592,6 +600,7 @@ function npNow(){
 }
 function npPos(n){
   let p = +n.pos || 0;
+  if (n.kind === 'game') return p + (performance.now() - NP.at) / 1000;   // time in game
   if (n.playing && n.dur) p += (performance.now() - NP.at) / 1000 * (n.rate || 1);
   return Math.max(0, n.dur ? Math.min(p, n.dur) : p);
 }
@@ -616,16 +625,20 @@ function npBg(n){
 }
 function npCover(n, cls){
   const art = npArt(n), icon = npIcon(n);
-  if (art) return `<div class="np-cover ${cls || ''}"><img src="${art}" alt=""></div>`;
+  // Posters (a show, a game's box art) keep their shape; everything else is square.
+  const ar = art && n.aspect ? ` style="--ar:${Math.max(0.66, Math.min(1, +n.aspect))}"` : '';
+  if (art) return `<div class="np-cover ${cls || ''}"${ar}><img src="${art}" alt=""></div>`;
   return `<div class="np-cover is-icon ${cls || ''}" style="--np:${npRGB(n)}">${
     icon ? `<img src="${icon}" alt="" onerror="this.outerHTML=NPI.note">` : NPI.note}</div>`;
 }
 function npBadge(n){
   const icon = npIcon(n);
-  return `<div class="np-app">${icon ? `<img src="${icon}" alt="">` : NPI.note}<span>${
+  return `<div class="np-app">${icon ? `<img src="${icon}" alt="">` : n.kind === 'game' ? NPI.pad : NPI.note}<span>${
     esc(n.appName || 'Now playing')}</span></div>`;
 }
 function npSeek(n){
+  if (n.kind === 'game') return `<div class="np-seek np-game"><div class="np-times">
+    <span><i class="np-livedot"></i>Playing for <b class="np-gt">${npTime(npPos(n))}</b></span></div></div>`;
   if (!(n.dur > 0)) return `<div class="np-seek np-nodur"><div class="np-track"></div>
     <div class="np-times"><span>${n.playing ? 'Live' : ''}</span><span></span></div></div>`;
   const p = npPos(n), pct = (p / n.dur * 100).toFixed(2) + '%';
@@ -634,6 +647,9 @@ function npSeek(n){
     <div class="np-times"><span class="np-el">${npTime(p)}</span><span class="np-rem">-${npTime(n.dur - p)}</span></div></div>`;
 }
 function npBtns(n, which){
+  if (n.kind === 'game') return `<div class="np-ctl"><button class="np-pill" data-npc="screen">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+    <span>Show the screen</span></button></div>`;
   const can = npCan(n);
   const b = (op, icon, en, cls) => `<button class="np-b ${cls || ''}" data-npc="${op}"
     aria-label="${op === 'toggle' ? (n.playing ? 'Pause' : 'Play') : op === 'next' ? 'Next' : 'Previous'}"
@@ -655,7 +671,7 @@ function nowPlayingInner(t){
     <span>Not playing</span>${size !== 's' ? '<small>Play something on the PC and it shows up here.</small>' : ''}</div></div>`;
   const text = `<div class="np-text">${size !== 's' ? npBadge(n) : ''}
     <div class="np-title">${esc(n.title)}</div>
-    <div class="np-artist">${esc(n.artist || n.album || n.appName || '')}</div></div>`;
+    <div class="np-artist">${esc(npSub(n))}</div></div>`;
   if (t.w === 1) return `<div class="${cls}">${npBg(n)}${npCover(n)}${npBtns(n, 'pp')}</div>`;
   if (size === 's'){
     const line = n.dur > 0 ? `<div class="np-line"><i class="np-fill" style="width:${(npPos(n) / n.dur * 100).toFixed(2)}%"></i></div>` : '';
@@ -672,13 +688,18 @@ function nowPlayingInner(t){
 function npKey(t){
   const n = S && S.nowplaying;
   return JSON.stringify([npSize(t), t.w, n && [n.title, n.artist, n.album, n.appName,
-    n.art, n.icon, n.playing, n.dur > 0, n.can, n.color]]);
+    n.art, n.icon, n.playing, n.dur > 0, n.can, n.color, n.kind, n.aspect]]);
 }
 
 /* The bar and the clock, four times a second, without touching anything
    else on the page. */
 function npTick(){
   const n = npNow();
+  if (n && n.kind === 'game'){
+    const g = npTime(npPos(n));
+    document.querySelectorAll('.np-gt').forEach(e => { if (e.textContent !== g) e.textContent = g; });
+    return;
+  }
   if (!n || !(n.dur > 0)) return;
   const p = NP.scrub ? NP.scrub.pos : npPos(n);
   const pct = (p / n.dur * 100).toFixed(2) + '%';
@@ -701,6 +722,7 @@ function npPaint(){
 }
 
 async function npCmd(op, pos){
+  if (op === 'screen'){ closeNowPlaying(); openDesktop({ ref: '0' }); return; }
   const n = S && S.nowplaying;
   if (n){
     // Answer the finger straight away; the PC's reply corrects it if needed.
@@ -797,7 +819,7 @@ function npFullEl(){
 function npFullDraw(){
   const el = npFullEl(), n = npNow();
   const key = JSON.stringify([n && [n.title, n.artist, n.album, n.appName, n.art, n.icon,
-    n.playing, n.dur > 0, n.can, n.color]]);
+    n.playing, n.dur > 0, n.can, n.color, n.kind, n.aspect]]);
   if (el._k !== key){
     el._k = key;
     el.innerHTML = !n
@@ -810,8 +832,9 @@ function npFullDraw(){
              ${npBadge(n)}<span style="width:38px"></span></div>
            <div class="npf-art">${npCover(n, 'np-big')}</div>
            <div class="npf-meta"><div class="np-title">${esc(n.title)}</div>
-             <div class="np-artist">${esc(n.artist || n.appName || '')}</div>
-             ${n.album && n.album !== n.title ? `<div class="npf-album">${esc(n.album)}</div>` : ''}</div>
+             <div class="np-artist">${esc(npSub(n))}</div>
+             ${n.album && n.album !== n.title ? `<div class="npf-album">${esc(n.album)}</div>` : ''}
+             </div>
            ${npSeek(n)}${npBtns(n, 'all')}
            <div class="npf-volrow">${NPI.volLo}
              <input type="range" class="npf-vol" min="0" max="100" aria-label="PC volume">${NPI.volHi}</div>
@@ -1922,6 +1945,16 @@ function openSettings(){
       <div class="d" id="sfRowState">${esc(sfState)}</div></div>
       <div style="color:var(--muted);font-size:12px">${sf.enabled ? 'Change' : 'Set up'}</div></div>
 
+    ${isPC() ? `<div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
+      text-transform:uppercase;margin:20px 0 9px">Now Playing</div>
+    <div class="srow" id="jfRow" style="cursor:pointer"><div style="flex-grow:1">
+      <div class="t">Jellyfin &amp; Moonfin</div>
+      <div class="d" id="jfRowState">Shows the show or movie you're watching</div></div>
+      <div style="color:var(--muted);font-size:12px">Set up</div></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:6px;line-height:1.45">
+      Music, YouTube and anything else Windows knows about shows up on its own,
+      and so does the game you're playing.</div>` : ''}
+
     <div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
       text-transform:uppercase;margin:20px 0 9px">Layout</div>
     <div style="display:flex;gap:7px">
@@ -2008,6 +2041,7 @@ $('#sheetBody').addEventListener('click', async e => {
     sfSetup('settings').catch(() => {});
     return;
   }
+  if (e.target.closest('#jfRow')){ openJellyfin(); return; }
   const m = e.target.closest('[data-mode]');
   if (m){ L.mode = m.dataset.mode; saveThemeSoon(); openSettings(); render(); return; }
 
@@ -2057,7 +2091,75 @@ function saveThemeSoon(){
   }, 500);
 }
 
-$('#setBtn').addEventListener('click', openSettings);
+$('#setBtn').addEventListener('click', () => {
+  openSettings();
+  if (isPC()) api('/api/jellyfin').then(j => {
+    const el = $('#jfRowState');
+    if (el && j.connected) el.textContent = 'Connected to ' + j.server.replace(/^https?:\/\//, '') + ' as ' + j.user;
+  }).catch(() => {});
+});
+
+/* Jellyfin / Moonfin for Now Playing. Moonfin plays video itself, so Windows
+   never hears about it - but the Jellyfin server does. Quick Connect gives the
+   PC its own sign-in: approve a code in Jellyfin, no password or key typed. */
+let jfTimer = null;
+async function openJellyfin(){
+  clearInterval(jfTimer);
+  let j;
+  try { j = await api('/api/jellyfin'); } catch(err){ toast(err.message); return; }
+  const draw = (j) => {
+    const here = (j.sessions || []).filter(x => x.here);
+    let body;
+    if (j.connected){
+      body = `<div class="jf-ok"><b>Connected</b><span>${esc(j.server)} · ${esc(j.user)}</span></div>
+        <div class="d" style="font-size:12.5px;color:var(--muted);line-height:1.5;margin:12px 2px">
+          Play something in Moonfin on this PC and Now Playing shows it, with the poster,
+          the episode and a live progress bar. ${j.error ? `<br><span style="color:var(--bad)">${esc(j.error)}</span>` : ''}</div>
+        ${(j.sessions || []).length ? `<div class="t" style="margin:14px 2px 6px;font-size:12px;color:var(--muted)">Jellyfin apps it can see</div>
+          ${j.sessions.map(x => `<div class="srow"><div style="flex-grow:1"><div class="t">${esc(x.client)}</div>
+            <div class="d">${esc(x.device)}${x.playing ? ' · playing' : ''}</div></div>
+            <div class="d" style="color:${x.here ? 'var(--good)' : 'var(--muted)'}">${x.here ? 'this PC' : 'elsewhere'}</div></div>`).join('')}` : ''}`;
+    } else if (j.pending){
+      body = `<div class="jf-code">${esc(j.pending)}</div>
+        <div class="d" style="font-size:13px;line-height:1.55;text-align:center;margin:4px 8px 14px">
+          In Jellyfin on your phone (the web page or the app), open your profile,
+          tap <b>Quick Connect</b> and enter this code.<br>This page updates by itself.</div>`;
+    } else {
+      body = `<div class="d" style="font-size:13px;line-height:1.55;margin:12px 2px">
+          Moonfin plays video on its own, so Windows can't see it - but your Jellyfin
+          server can. Connect once and Now Playing shows what you're watching.
+          You'll approve it with a code in Jellyfin; no password is typed here.</div>
+        <input class="field" id="jfServer" type="url" placeholder="https://your-jellyfin" value="${esc(j.server || j.suggested || '')}"
+          style="width:100%;margin-top:4px" autocapitalize="off" autocorrect="off">
+        ${j.suggested ? '<div class="d" style="font-size:11px;color:var(--muted);margin:6px 2px">Found in Moonfin on this PC.</div>' : ''}
+        ${j.qcState === 'expired' ? '<div class="d" style="color:var(--bad);font-size:12px;margin-top:6px">That code expired - start again.</div>' : ''}`;
+    }
+    openSheet('Jellyfin & Moonfin', body,
+      j.connected ? `<button class="btn" id="jfOff">Disconnect</button><div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`
+      : j.pending ? `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Cancel</button>`
+      : `<div style="flex-grow:1"></div><button class="btn pri" id="jfGo">Connect</button>`);
+    const go = $('#jfGo');
+    if (go) go.onclick = async () => {
+      go.disabled = true;
+      try { await api('/api/jellyfin/connect', { server: $('#jfServer').value }); openJellyfin(); }
+      catch(err){ go.disabled = false; toast(err.message); }
+    };
+    const off = $('#jfOff');
+    if (off) off.onclick = async () => { await api('/api/jellyfin/disconnect', {}); openJellyfin(); };
+    const c = $('#sheetClose');
+    if (c) c.onclick = () => { clearInterval(jfTimer); closeSheet(); };
+  };
+  draw(j);
+  if (j.pending){
+    jfTimer = setInterval(async () => {
+      if (!$('#sheet').classList.contains('show')){ clearInterval(jfTimer); return; }
+      try {
+        const k = await api('/api/jellyfin');
+        if (!k.pending){ clearInterval(jfTimer); draw(k); if (k.connected) toast('Jellyfin connected'); }
+      } catch(e){}
+    }, 2000);
+  }
+}
 
 /* ================= full-screen desktop =================
  *

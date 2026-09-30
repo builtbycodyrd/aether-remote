@@ -9,6 +9,8 @@ auth.json
 .git-credentials
 # the HTTPS certificate + private key fetched from Tailscale
 tls/
+# the Jellyfin sign-in Quick Connect gave this install (Now Playing)
+jellyfin.json
 
 # --- this install's state ----------------------------------------------------
 # NOTE: no trailing comments on these lines. In .gitignore a '#' only starts a

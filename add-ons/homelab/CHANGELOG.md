@@ -1,3 +1,8 @@
+# 0.3.3
+
+- The shared phone app is synced with Aether Remote 1.4.1 (Now Playing for
+  games and Jellyfin is PC-only; nothing changes here).
+
 # 0.3.2
 
 - The phone app is refreshed to match Aether Remote 1.4.0. Its new pieces

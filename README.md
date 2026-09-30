@@ -36,6 +36,9 @@ From then on your phone has a grid of tiles you arrange yourself:
   a YouTube tab, a game launcher — with the artwork, the app's icon, a
   moving progress bar you can scrub, and the buttons. The tile takes on the
   artwork's colours; tap it for a full-screen player with the PC's volume.
+  It also shows the game you're in (with its box art and how long you've
+  been playing) and — once you connect Jellyfin in Settings with a Quick
+  Connect code — what you're watching in Moonfin or any Jellyfin app.
 - **Your PC's files, in their own tab.** Places and drives, search, sort,
   thumbnails, previews of photos, video, music, PDFs and text. Pick several
   and download them as one zip, or upload from the phone into your own
@@ -281,6 +284,8 @@ Everything else is the standard library or raw `ctypes`.
 | `auth.py` | TOTP and session cookies |
 | `sysctl.py` | volume, media keys, power, the volume lock, the clipboard |
 | `media.py` | Now Playing: the live session, artwork, colours, controls |
+| `games.py` | Now Playing: which game from your library is running |
+| `jellyfin.py` | Now Playing: Moonfin / Jellyfin, through the Jellyfin server |
 | `files.py` | the Files tab, and the rules for what it may read and write |
 | `stream.py` | screen capture and input injection |
 | `library.py` | finding your games and their artwork |

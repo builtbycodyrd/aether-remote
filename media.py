@@ -286,17 +286,31 @@ def _main_colour(im):
 
 
 def _process_art(raw):
-    """Artwork bytes from the app -> (jpeg bytes, colour). Re-encoding
-    means we only ever hand the phone an image we produced."""
+    """Artwork bytes from the app -> (jpeg bytes, colour, shape). Re-encoding
+    means we only ever hand the phone an image we produced. The shape is
+    width/height, kept between a poster (2:3) and a square - wider art is
+    shown square-cropped, the way Spotify does video thumbnails."""
     from PIL import Image
     im = Image.open(io.BytesIO(raw))
     im.load()
     colour = _main_colour(im)
+    aspect = round(max(2 / 3, min(1.0, im.width / float(im.height or 1))), 3)
     im = im.convert("RGB")
     im.thumbnail((ART_MAX, ART_MAX))
     out = io.BytesIO()
     im.save(out, "JPEG", quality=88)
-    return out.getvalue(), colour
+    return out.getvalue(), colour, aspect
+
+
+def store_art(raw):
+    """Any artwork -> (hash, colour, shape), kept for /api/np/art."""
+    jpg, colour, aspect = _process_art(raw)
+    h = hashlib.sha1(jpg).hexdigest()[:16]
+    with _lock:
+        _art[h] = (jpg, "image/jpeg")
+        for old in list(_art)[:-4]:
+            _art.pop(old, None)
+    return h, colour, aspect
 
 
 def _icon_colour(path):
@@ -340,6 +354,7 @@ class _Reader:
         self.track_key = None
         self.art_hash = None
         self.art_colour = None
+        self.art_aspect = None
 
     async def manager(self):
         if self.mgr is None:
@@ -412,18 +427,12 @@ class _Reader:
         key = (aumid, title, artist, album)
         if key != self.track_key:
             self.track_key = key
-            self.art_hash, self.art_colour = None, None
+            self.art_hash, self.art_colour, self.art_aspect = None, None, None
             if props.thumbnail is not None:
                 try:
                     raw = await _read_thumb(props.thumbnail)
                     if raw:
-                        jpg, colour = _process_art(raw)
-                        h = hashlib.sha1(jpg).hexdigest()[:16]
-                        with _lock:
-                            _art[h] = (jpg, "image/jpeg")
-                            for old in list(_art)[:-2]:
-                                _art.pop(old, None)
-                        self.art_hash, self.art_colour = h, colour
+                        self.art_hash, self.art_colour, self.art_aspect = store_art(raw)
                 except Exception:
                     pass
 
@@ -438,6 +447,7 @@ class _Reader:
                 colour = _icon_colour_cached(ipath)
 
         return {
+            "src": "smtc", "kind": "media", "aspect": self.art_aspect,
             "title": title[:200], "artist": artist[:200], "album": album[:200],
             "app": aumid[:200], "appName": app["name"],
             "status": status, "playing": status == PLAYING,
@@ -461,15 +471,95 @@ def _icon_colour_cached(path):
 
 _reader = _Reader()
 
+# --------------------------------------------------------------- games
+# remote.py tells us how to get the library and each game's artwork.
+_lib = {"items": lambda: [], "art": lambda item: None}
+_game_art = {}           # art file path -> (hash, colour, shape)
+
+
+def configure(items=None, art_for=None):
+    if items:
+        _lib["items"] = items
+    if art_for:
+        _lib["art"] = art_for
+
+
+def _read_game():
+    import games
+    g = games.current(_lib["items"]() or [])
+    if not g:
+        return None
+    it = g["item"]
+    started = g["started"] or _read_game.first.setdefault(it["id"], time.time())
+    art, colour, aspect = None, None, None
+    path = None
+    try:
+        path = _lib["art"](it)
+    except Exception:
+        pass
+    if path and os.path.isfile(path):
+        if path not in _game_art:
+            try:
+                with open(path, "rb") as f:
+                    _game_art[path] = store_art(f.read())
+            except Exception:
+                _game_art[path] = (None, None, None)
+        art, colour, aspect = _game_art[path]
+        with _lock:                              # keep it servable
+            if art and art not in _art:
+                _game_art.pop(path, None)
+    icon_v = None
+    ipath = icon_path(g["exe"]) if g["exe"] else None
+    if ipath:
+        icon_v = hashlib.sha1(ipath.encode("utf-8", "ignore")).hexdigest()[:12]
+        with _lock:
+            _icon["key"], _icon["path"] = icon_v, ipath
+        if colour is None:
+            colour = _icon_colour_cached(ipath)
+    src = {"steam": "Steam", "epic": "Epic Games", "ubi": "Ubisoft", "uwp": "Xbox"}.get(
+        it["id"].split("-", 1)[0], it.get("source") or "Game")
+    now = time.time()
+    return {"src": "game", "kind": "game", "gameId": it["id"],
+            "title": it["name"][:200], "artist": src, "album": "",
+            "app": src, "appName": src, "status": PLAYING, "playing": True,
+            "pos": round(max(0.0, now - started), 1), "dur": 0, "rate": 1.0, "at": now,
+            "art": art, "icon": icon_v, "color": colour, "aspect": aspect,
+            "can": {"toggle": False, "next": False, "prev": False, "seek": False}}
+
+
+_read_game.first = {}
+
+
+def _choose(smtc, jf, game):
+    """Something actually playing beats a game, a game beats something paused."""
+    for v in (jf, smtc):
+        if v and v["playing"]:
+            return v
+    return game or jf or smtc
+
 
 async def _pump():
+    import jellyfin
+    last_game, game = 0.0, None
     while True:
         if time.time() - _want["at"] < WANT_FOR:
+            smtc = None
+            if HAVE_WINRT:
+                try:
+                    smtc = await _reader.read()
+                except Exception:
+                    _reader.mgr = None          # re-acquire next time
+            if time.time() - last_game > 2:
+                last_game = time.time()
+                try:
+                    game = _read_game()
+                except Exception:
+                    game = None
             try:
-                val = await _reader.read()
+                jf = jellyfin.current(art_cb=store_art)
             except Exception:
-                val = None
-                _reader.mgr = None          # re-acquire next time
+                jf = None
+            val = _choose(smtc, jf, game)
             with _lock:
                 _snap["val"], _snap["at"] = val, time.time()
             await asyncio.sleep(POLL)
@@ -491,7 +581,7 @@ def _thread():
 
 def _start():
     global _started
-    if _started or not HAVE_WINRT:
+    if _started:
         return
     _started = True
     threading.Thread(target=_thread, name="now-playing", daemon=True).start()
@@ -503,17 +593,19 @@ def now_playing():
     """The latest snapshot, immediately, with the position carried forward
     to this instant. Asking also keeps the reader awake."""
     _want["at"] = time.time()
-    if not HAVE_WINRT:
-        import sysctl
-        return sysctl.now_playing()
     _start()
     with _lock:
         v = _snap["val"]
+    if not v and not HAVE_WINRT:
+        import sysctl
+        return sysctl.now_playing()
     if not v:
         return None
     v = dict(v)
     now = time.time()
-    if v["playing"] and v["dur"]:
+    if v.get("kind") == "game":
+        v["pos"] = round(v["pos"] + now - v["at"], 1)
+    elif v["playing"] and v["dur"]:
         v["pos"] = round(min(v["dur"], v["pos"] + (now - v["at"]) * v["rate"]), 2)
     v["at"] = now
     return v
@@ -536,6 +628,15 @@ def command(op, pos=None):
     (ok, error). Without winrt it falls back to the media keys."""
     if op not in ("toggle", "next", "prev", "seek"):
         return False, "unknown command"
+    with _lock:
+        cur = _snap["val"]
+    if cur and cur.get("src") == "game":
+        return False, "games have no media buttons"
+    if cur and cur.get("src") == "jellyfin":
+        import jellyfin
+        ok, err = jellyfin.command(cur.get("session"), op, pos)
+        _want["at"] = time.time()
+        return ok, err
     if not HAVE_WINRT or _loop is None:
         if op == "seek":
             return False, "seeking needs the winrt packages"
@@ -574,8 +675,6 @@ def command(op, pos=None):
 
 def refresh_now(timeout=3.0):
     """Block until a fresh read lands (tests; and right after a command)."""
-    if not HAVE_WINRT:
-        return now_playing()
     _start()
     _want["at"] = time.time()
     t0 = time.time()

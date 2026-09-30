@@ -35,7 +35,7 @@ if os.path.isdir(static):
 hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
-    "update", "wol", "tls", "secondfactor", "webauthn", "media", "files",
+    "update", "wol", "tls", "secondfactor", "webauthn", "media", "files", "games", "jellyfin",
     # Now Playing reads Windows' media controls through these (WinRT).
     "winrt.runtime", "winrt.system", "winrt.windows.foundation",
     "winrt.windows.foundation.collections", "winrt.windows.media.control",

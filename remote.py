@@ -48,6 +48,7 @@ import secondfactor   # noqa: E402
 import version        # noqa: E402
 import media          # noqa: E402
 import files          # noqa: E402
+import jellyfin       # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -641,6 +642,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/art":
                 return self._art(qs.get("id", [""])[0])
 
+            if path == "/api/jellyfin":
+                return self._send(200, jellyfin.status())
+
             if path == "/api/np/art":
                 # Artwork of what's playing - re-encoded by us, served by hash.
                 got = media.art(qs.get("v", [""])[0])
@@ -868,6 +872,23 @@ class Handler(BaseHTTPRequestHandler):
                 okset = sysctl.set_clipboard_text(text)
                 return self._send(200 if okset else 500,
                                   {"ok": okset, "chars": len(text)})
+
+            if path == "/api/jellyfin/connect":
+                # Quick Connect: the PC gets its own Jellyfin sign-in once
+                # you approve the code in Jellyfin. No password, no key.
+                try:
+                    code = jellyfin.start_quick_connect(str(b.get("server", "")))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                except Exception as e:
+                    return self._send(502, {"error": "Jellyfin didn't answer: %s" % e})
+                log("jellyfin: quick connect started")
+                return self._send(200, {"code": code})
+
+            if path == "/api/jellyfin/disconnect":
+                jellyfin.disconnect()
+                log("jellyfin: disconnected")
+                return self._send(200, jellyfin.status())
 
             if path == "/api/media":
                 # Now playing's own buttons: they drive the session shown on
@@ -2035,6 +2056,11 @@ def main():
     if not _claim_port(a.port):
         log("another Aether Remote server already runs on port %d - exiting" % a.port)
         return 3
+
+    # Now Playing also shows the game you're in: it needs the library, and
+    # each game's artwork (yours if you dropped some in, else the scanned art).
+    media.configure(items=library_items,
+                    art_for=lambda it: Handler._custom_art_for(it["id"]) or it.get("art"))
 
     host = resolve_host(a.host)
 
