@@ -646,14 +646,26 @@ function npSeek(n){
     <div class="np-track"><i class="np-fill" style="width:${pct}"></i><b class="np-knob" style="left:${pct}"></b></div>
     <div class="np-times"><span class="np-el">${npTime(p)}</span><span class="np-rem">-${npTime(n.dur - p)}</span></div></div>`;
 }
+const NPS = {
+  back10: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4.5 3.8v3.6h3.6"/><text x="12.2" y="15.4" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none">10</text></svg>',
+  fwd10: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 3.8v3.6h-3.6"/><text x="11.8" y="15.4" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none">10</text></svg>',
+};
+
 function npBtns(n, which){
   if (n.kind === 'game') return `<div class="np-ctl"><button class="np-pill" data-npc="screen">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
     <span>Show the screen</span></button></div>`;
   const can = npCan(n);
   const b = (op, icon, en, cls) => `<button class="np-b ${cls || ''}" data-npc="${op}"
-    aria-label="${op === 'toggle' ? (n.playing ? 'Pause' : 'Play') : op === 'next' ? 'Next' : 'Previous'}"
+    aria-label="${op === 'toggle' ? (n.playing ? 'Pause' : 'Play') : op === 'next' ? 'Next'
+      : op === 'back10' ? 'Back 10 seconds' : op === 'fwd10' ? 'Forward 10 seconds' : 'Previous'}"
     ${en ? '' : 'disabled'}>${icon}</button>`;
+  if (which === 'full'){
+    const sk = can.seek && n.dur > 0;
+    return `<div class="np-ctl np-ctl-full">${b('prev', NPI.prev, can.prev)}${
+      b('back10', NPS.back10, sk, 'np-sk')}${b('toggle', n.playing ? NPI.pause : NPI.play, can.toggle, 'np-pp')}${
+      b('fwd10', NPS.fwd10, sk, 'np-sk')}${b('next', NPI.next, can.next)}</div>`;
+  }
   return `<div class="np-ctl">${which !== 'pp' ? b('prev', NPI.prev, can.prev) : ''}${
     b('toggle', n.playing ? NPI.pause : NPI.play, can.toggle, 'np-pp')}${
     which !== 'pp' ? b('next', NPI.next, can.next) : ''}</div>`;
@@ -723,6 +735,12 @@ function npPaint(){
 
 async function npCmd(op, pos){
   if (op === 'screen'){ closeNowPlaying(); openDesktop({ ref: '0' }); return; }
+  if (op === 'back10' || op === 'fwd10'){
+    const cur = S && S.nowplaying;
+    if (!cur || !(cur.dur > 0)) return;
+    pos = Math.max(0, Math.min(cur.dur - 1, npPos(cur) + (op === 'back10' ? -10 : 10)));
+    op = 'seek';
+  }
   const n = S && S.nowplaying;
   if (n){
     // Answer the finger straight away; the PC's reply corrects it if needed.
@@ -835,7 +853,7 @@ function npFullDraw(){
              <div class="np-artist">${esc(npSub(n))}</div>
              ${n.album && n.album !== n.title ? `<div class="npf-album">${esc(n.album)}</div>` : ''}
              </div>
-           ${npSeek(n)}${npBtns(n, 'all')}
+           ${npSeek(n)}${npBtns(n, 'full')}
            <div class="npf-volrow">${NPI.volLo}
              <input type="range" class="npf-vol" min="0" max="100" aria-label="PC volume">${NPI.volHi}</div>
          </div>`;
@@ -868,6 +886,10 @@ function iconFor(ref){
     'media.playpause': `<svg ${s}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
     'media.next': `<svg ${s}><path d="M5 4l10 8-10 8z"/><path d="M19 5v14"/></svg>`,
     'media.prev': `<svg ${s}><path d="M19 4L9 12l10 8z"/><path d="M5 5v14"/></svg>`,
+    'media.back10': `<svg ${s}><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">10</text></svg>`,
+    'media.fwd10': `<svg ${s}><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">10</text></svg>`,
+    'media.back30': `<svg ${s}><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">30</text></svg>`,
+    'media.fwd30': `<svg ${s}><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">30</text></svg>`,
     'screen.off': `<svg ${s}><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>`,
     'power.lock': `<svg ${s}><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
     'power.sleep': `<svg ${s}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`,
@@ -1099,7 +1121,9 @@ board.addEventListener('input', e => {
   if (draggingSlider){ draggingSlider = false; suppressUntil = Date.now() + 700; }
 }, {passive:true}));
 
-/* Long-press anywhere on the board enters edit mode - the home-screen gesture. */
+/* Long-press anywhere on the board enters edit mode - the home-screen gesture.
+   (Not the browser's own "Save image" menu on a game's art.) */
+board.addEventListener('contextmenu', e => { if (e.target.closest('[data-tile]')) e.preventDefault(); });
 let pressTimer = null, pressStart = null;
 board.addEventListener('pointerdown', e => {
   if (editing || e.target.closest('[data-slider]')) return;
@@ -1179,6 +1203,7 @@ board.addEventListener('click', async e => {
     if (t.kind === 'toggle' && t.ref === 'keeper' && S) body.target = S.volume;
     const r = await api('/api/tile', body);
     if (r && r.volume !== undefined) S = r;
+    if (r && r.nowplaying && S){ S.nowplaying = r.nowplaying; npPaint(); }
     if (t.kind === 'scene') toast('Running ' + t.label);
     if (restart) toast('Restarting ' + t.label);
     render();
@@ -1441,27 +1466,38 @@ $('#scrim').addEventListener('click', () => closeSheet());
 
 /* ---------- add a tile ---------- */
 const CONTROLS = [
-  { kind:'slider', ref:'volume', label:'Volume', w:4, h:1 },
-  { kind:'toggle', ref:'mute', label:'Mute', w:1, h:1 },
-  { kind:'toggle', ref:'keeper', label:'Lock volume', w:2, h:1 },
-  { kind:'action', ref:'media.playpause', label:'Play/Pause', w:1, h:1 },
-  { kind:'action', ref:'media.next', label:'Next', w:1, h:1 },
-  { kind:'action', ref:'media.prev', label:'Previous', w:1, h:1 },
-  { kind:'action', ref:'screen.off', label:'Screen off', w:1, h:1 },
-  { kind:'stream', ref:'0', label:'Desktop', w:4, h:2 },
-  { kind:'nowplaying', ref:'', label:'Now playing', w:4, h:2 },
-  { kind:'stat',   ref:'cpu', label:'CPU', w:2, h:1 },
-  { kind:'stat',   ref:'gpu', label:'GPU', w:2, h:1 },
-  { kind:'stat',   ref:'ram', label:'RAM', w:2, h:1 },
-  { kind:'stat',   ref:'disk', label:'Disk', w:2, h:1 },
-  { kind:'stat',   ref:'temp', label:'Temp', w:2, h:1 },
-  { kind:'stat',   ref:'battery', label:'Battery', w:2, h:1 },
-  { kind:'action', ref:'power.lock', label:'Lock PC', w:2, h:1 },
-  { kind:'action', ref:'power.sleep', label:'Sleep', w:2, h:1 },
-  { kind:'action', ref:'power.restart', label:'Restart', w:2, h:1 },
-  { kind:'action', ref:'power.shutdown', label:'Shut down', w:2, h:1 },
-  { kind:'action', ref:'power.signout', label:'Sign out', w:2, h:1 },
+  { g:'Sound', kind:'slider', ref:'volume', label:'Volume', w:4, h:1 },
+  { g:'Sound', kind:'toggle', ref:'mute', label:'Mute', w:1, h:1 },
+  { g:'Sound', kind:'toggle', ref:'keeper', label:'Lock volume', w:2, h:1 },
+  { g:'Media', kind:'nowplaying', ref:'', label:'Now playing', w:4, h:2 },
+  { g:'Media', kind:'action', ref:'media.playpause', label:'Play/Pause', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.prev', label:'Previous', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.next', label:'Next', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.back10', label:'Back 10s', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.fwd10', label:'Forward 10s', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.back30', label:'Back 30s', w:1, h:1 },
+  { g:'Media', kind:'action', ref:'media.fwd30', label:'Forward 30s', w:1, h:1 },
+  { g:'Screen', kind:'stream', ref:'0', label:'Desktop', w:4, h:2 },
+  { g:'Screen', kind:'action', ref:'screen.off', label:'Screen off', w:1, h:1 },
+  { g:'Stats', kind:'stat', ref:'cpu', label:'CPU', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'gpu', label:'GPU', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'ram', label:'RAM', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'disk', label:'Disk', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'temp', label:'Temp', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'battery', label:'Battery', w:2, h:1 },
+  { g:'Power', kind:'action', ref:'power.lock', label:'Lock PC', w:2, h:1 },
+  { g:'Power', kind:'action', ref:'power.sleep', label:'Sleep', w:2, h:1 },
+  { g:'Power', kind:'action', ref:'power.restart', label:'Restart', w:2, h:1 },
+  { g:'Power', kind:'action', ref:'power.shutdown', label:'Shut down', w:2, h:1 },
+  { g:'Power', kind:'action', ref:'power.signout', label:'Sign out', w:2, h:1 },
 ];
+
+/* Is this control already somewhere on the remote? Two Volume sliders or two
+   Now Playing cards are never what anyone wants, so the catalog says so. */
+function onBoard(x){
+  return !!L && L.sections.some(s => s.tiles.some(t =>
+    t.kind === x.kind && String(t.ref || '') === String(x.ref || '')));
+}
 
 async function openAdd(secId){
   sheetCtx = { secId, tab:'game', sel:new Set() };
@@ -1538,10 +1574,11 @@ function drawAdd(){
 
   } else if (c.tab === 'ctrl'){
     bodyHTML += `<div class="list" style="margin-top:6px">
-      ${CONTROLS.map((x,i) => `<div class="it" data-ctrl="${i}">
-        ${iconFor(x.ref)}
+      ${CONTROLS.map((x,i) => `${i === 0 || CONTROLS[i - 1].g !== x.g
+          ? `<div class="grp">${esc(x.g)}</div>` : ''}<div class="it ${onBoard(x) ? 'added' : ''}" data-ctrl="${i}">
+        ${iconFor(x.kind === 'nowplaying' ? 'nowplaying' : x.kind === 'stream' ? 'stream' : x.ref)}
         <div class="nm">${esc(x.label)}<div class="sub">${x.w} × ${x.h}</div></div>
-        <div class="ch">+</div></div>`).join('')}</div>`;
+        <div class="ch">${onBoard(x) ? 'Added' : '+'}</div></div>`).join('')}</div>`;
   } else {
     const scenes = (L.scenes || []);
     bodyHTML += scenes.length
@@ -1684,7 +1721,9 @@ $('#sheetBody').addEventListener('click', async e => {
   const ctrl = e.target.closest('[data-ctrl]');
   if (ctrl){
     const spec = CONTROLS[+ctrl.dataset.ctrl];
-    addTiles([{ ...spec, id: 't' + Math.random().toString(36).slice(2,10) }]);
+    if (onBoard(spec)){ toast(spec.label + ' is already on your remote'); return; }
+    const { g, ...tile } = spec;
+    addTiles([{ ...tile, id: 't' + Math.random().toString(36).slice(2,10) }]);
     return;
   }
 
@@ -2740,6 +2779,10 @@ async function fsPaste(text){
 
   fsq('fsEnter').onclick = fsEnterKey;
   fsq('fsClipDone').onclick = () => { fsq('fsClip').hidden = true; };
+  // Android's long-press menu ("Download image", "Copy") on the picture: no.
+  fsq('fs').addEventListener('contextmenu', e => {
+    if (!e.target.closest('input,textarea')) e.preventDefault();
+  });
 
   // The dock's buttons must not steal focus from the input: on a phone,
   // losing focus closes the keyboard, and pressing Ctrl+C should not shut
@@ -3179,6 +3222,7 @@ async function openApps(){
  * is readable and writable (files.py); this is only the part you see. */
 const FV = {
   path: '', data: null, list: [], sel: new Set(), selecting: false, q: '',
+  stack: [],          // where you came from, for Back - like a phone's Files app
   sort: (() => { try { return JSON.parse(localStorage.getItem('aether.fsort')) || { by: 'name', desc: false }; }
                  catch(e){ return { by: 'name', desc: false }; } })(),
   seq: 0, searchT: null, pressT: null, view: null,
@@ -3248,6 +3292,43 @@ function fvSorted(list){
 
 function fvEl(){ return document.getElementById('files'); }
 
+/* Go somewhere new: remember where you were, so Back returns there (not just
+   to the parent - from Downloads, Back means "Files", not your user folder). */
+function fvOpenPath(path){
+  path = path || '';
+  if (path === FV.path && !FV.q) return;
+  const entry = { path: FV.path, name: fvTitle(), pushed: false };
+  FV.stack.push(entry);
+  // A history entry too, so the phone's own back gesture / button works here.
+  try { history.pushState({ aetherFiles: FV.stack.length }, ''); entry.pushed = true; } catch(e){}
+  fvGo(path, { dir: 'fwd' });
+}
+
+/* Back: leave a search first, then retrace your steps, then go up a level. */
+function fvBack(fromPop){
+  if (FV.q){
+    FV.q = '';
+    const inp = fvEl().querySelector('.fv-search input');
+    if (inp) inp.value = '';
+    fvSearch('');
+    return;
+  }
+  if (FV.stack.length){
+    if (!fromPop && FV.stack[FV.stack.length - 1].pushed){ history.back(); return; }   // -> popstate
+    const prev = FV.stack.pop();
+    fvGo(prev.path, { dir: 'back' });
+    return;
+  }
+  if (FV.path) fvGo((FV.data && FV.data.path === FV.path && FV.data.up) || '', { dir: 'back' });
+}
+window.addEventListener('popstate', () => {
+  // The phone's own back gesture / button, while Files is open.
+  if (FV.stack.length){
+    if (document.body.classList.contains('filesOn')) fvBack(true);
+    else FV.stack.pop();
+  }
+});
+
 async function fvGo(path, opts){
   opts = opts || {};
   const seq = ++FV.seq;
@@ -3266,13 +3347,15 @@ async function fvGo(path, opts){
   FV.data = data;
   FV.list = fvSorted(data.entries || []);
   fvEl().classList.remove('loading');
-  fvDraw(opts.silent ? null : (path && prev && path.length < prev.length ? 'back' : path !== prev ? 'fwd' : null));
+  fvDraw(opts.silent ? null : (opts.dir || (path !== prev ? 'fwd' : null)));
   if (!opts.silent && scroller) scroller.scrollTop = 0;
 }
 
 async function fvSearch(q){
+  const was = FV.q;
   FV.q = q;
   const seq = ++FV.seq;
+  if (!!was !== !!q) fvDraw();
   if (!q){ FV.list = fvSorted((FV.data && FV.data.entries) || []); fvDrawList(); return; }
   const where = FV.path || ((FV.data && FV.data.places || []).find(p => p.icon === 'home') || {}).path || '';
   if (!where) return;
@@ -3307,9 +3390,12 @@ function fvTitle(){
 function fvDraw(dir){
   const el = fvEl(), d = FV.data || {};
   const home = !FV.path;
-  const upName = home ? '' : (d.up ? (d.up.replace(/\\+$/, '').split('\\').pop() || d.up) : 'Files');
+  // Back is labelled with where it goes, like iOS.
+  const last = FV.stack[FV.stack.length - 1];
+  const upName = home ? '' : last ? (last.path ? last.name : 'Files')
+    : (d.up ? (d.up.replace(/\\+$/, '').split('\\').pop() || d.up) : 'Files');
   el.querySelector('.fv-bar').innerHTML = `
-    ${home ? '<span class="fv-bar-sp"></span>' : `<button class="fv-back" data-fv="up">${FVI.back}<span>${esc(upName)}</span></button>`}
+    ${home && !FV.q ? '<span class="fv-bar-sp"></span>' : `<button class="fv-back" data-fv="up">${FVI.back}<span>${esc(FV.q ? 'Done' : upName)}</span></button>`}
     <span class="grow"></span>
     ${!home && d.writable ? `<button class="fv-ib" data-fv="upload" aria-label="Upload from this phone">${FVI.up}</button>` : ''}
     ${!home ? `<button class="fv-txtbtn" data-fv="select">${FV.selecting ? 'Cancel' : 'Select'}</button>` : ''}`;
@@ -3649,7 +3735,7 @@ function fvBuild(){
     const b = e.target.closest('[data-fv]');
     if (b){
       const a = b.dataset.fv;
-      if (a === 'up') fvGo(FV.data && FV.data.up ? FV.data.up : '');
+      if (a === 'up') fvBack();
       if (a === 'select'){ FV.selecting = !FV.selecting; FV.sel.clear(); fvDraw(); }
       if (a === 'all'){
         const all = FV.sel.size === FV.list.length;
@@ -3661,7 +3747,7 @@ function fvBuild(){
       return;
     }
     const go = e.target.closest('[data-go]');
-    if (go){ fvGo(go.dataset.go); return; }
+    if (go){ fvOpenPath(go.dataset.go); return; }
     const row = e.target.closest('.fv-row');
     if (!row || Date.now() < (FV.pressedAt || 0)) return;
     const en = FV.list[+row.dataset.i];
@@ -3672,7 +3758,7 @@ function fvBuild(){
       fvSelBar();
       return;
     }
-    if (en.dir) fvGo(en.path); else fvOpen(en);
+    if (en.dir) fvOpenPath(en.path); else fvOpen(en);
   });
 
   // Hold a row to start selecting, like Photos / Files on the phone.
@@ -3703,12 +3789,12 @@ function fvBuild(){
   let sw = null;
   el.addEventListener('touchstart', e => {
     const t = e.touches[0];
-    sw = t.clientX < 28 && FV.path ? { x: t.clientX, y: t.clientY } : null;
+    sw = t.clientX < 28 && (FV.path || FV.q) ? { x: t.clientX, y: t.clientY } : null;
   }, { passive: true });
   el.addEventListener('touchend', e => {
     if (!sw) return;
     const t = e.changedTouches[0];
-    if (t.clientX - sw.x > 80 && Math.abs(t.clientY - sw.y) < 60) fvGo(FV.data && FV.data.up ? FV.data.up : '');
+    if (t.clientX - sw.x > 80 && Math.abs(t.clientY - sw.y) < 60) fvBack();
     sw = null;
   }, { passive: true });
   return el;
@@ -3737,8 +3823,10 @@ function setupTabs(){
   t.addEventListener('click', e => {
     const b = e.target.closest('[data-tab]');
     if (!b) return;
-    if (b.dataset.tab === 'files' && document.body.classList.contains('filesOn') && FV.path){
-      fvGo('');                                     // tap Files again = back to the top
+    if (b.dataset.tab === 'files' && document.body.classList.contains('filesOn') && (FV.path || FV.q)){
+      FV.stack = [];                                // tap Files again = back to the top
+      FV.q = '';
+      fvGo('', { dir: 'back' });
       return;
     }
     showTab(b.dataset.tab);

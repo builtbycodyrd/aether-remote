@@ -1,3 +1,9 @@
+# 0.3.4
+
+- Shared phone app synced with Aether Remote 1.4.2: holding a tile no
+  longer pops up the phone's own image menu, and the Add tile list marks
+what's already on your remote.
+
 # 0.3.3
 
 - The shared phone app is synced with Aether Remote 1.4.1 (Now Playing for

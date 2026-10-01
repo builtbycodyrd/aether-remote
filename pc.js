@@ -174,21 +174,35 @@ const SIZES = [[1,1],[2,1],[4,1],[2,2],[2,3],[4,2],[4,3]];
    the desktop preview, volume, and the safe actions. Each is "kind:ref" with
    a default label and size. */
 const ADDABLE = [
-  ['stat:cpu',        'CPU',            2, 1],
-  ['stat:gpu',        'GPU',            2, 1],
-  ['stat:ram',        'RAM',            2, 1],
-  ['stat:disk',       'Disk',           2, 1],
-  ['stat:temp',       'Temperature',    2, 1],
-  ['stat:battery',    'Battery',        2, 1],
-  ['nowplaying:',     'Now playing',    4, 2],
-  ['stream:0',        'Desktop preview',4, 2],
-  ['slider:volume',   'Volume',         4, 1],
-  ['toggle:mute',     'Mute',           1, 1],
-  ['toggle:keeper',   'Lock volume',    2, 1],
-  ['action:power.lock',      'Lock PC',    2, 1],
-  ['action:media.playpause', 'Play/Pause', 1, 1],
-  ['action:screen.off',      'Screen off', 1, 1],
+  // [kind:ref, name, w, h, group] - the same catalogue as the phone's Controls
+  ['slider:volume',   'Volume',         4, 1, 'Sound'],
+  ['toggle:mute',     'Mute',           1, 1, 'Sound'],
+  ['toggle:keeper',   'Lock volume',    2, 1, 'Sound'],
+  ['nowplaying:',     'Now playing',    4, 2, 'Media'],
+  ['action:media.playpause', 'Play/Pause', 1, 1, 'Media'],
+  ['action:media.prev',      'Previous',   1, 1, 'Media'],
+  ['action:media.next',      'Next',       1, 1, 'Media'],
+  ['action:media.back10',    'Back 10s',   1, 1, 'Media'],
+  ['action:media.fwd10',     'Forward 10s',1, 1, 'Media'],
+  ['action:media.back30',    'Back 30s',   1, 1, 'Media'],
+  ['action:media.fwd30',     'Forward 30s',1, 1, 'Media'],
+  ['stream:0',        'Desktop preview',4, 2, 'Screen'],
+  ['action:screen.off',      'Screen off', 1, 1, 'Screen'],
+  ['stat:cpu',        'CPU',            2, 1, 'Stats'],
+  ['stat:gpu',        'GPU',            2, 1, 'Stats'],
+  ['stat:ram',        'RAM',            2, 1, 'Stats'],
+  ['stat:disk',       'Disk',           2, 1, 'Stats'],
+  ['stat:temp',       'Temperature',    2, 1, 'Stats'],
+  ['stat:battery',    'Battery',        2, 1, 'Stats'],
+  ['action:power.lock',      'Lock PC',    2, 1, 'Power'],
+  ['action:power.sleep',     'Sleep',      2, 1, 'Power'],
 ];
+
+/* Already on the remote somewhere? Then it's listed but can't be added twice. */
+function addedAlready(kr){
+  const [kind, ref] = kr.split(':');
+  return L.sections.some(s => s.tiles.some(t => t.kind === kind && String(t.ref || '') === (ref || '')));
+}
 
 // Which tile (if any) has its pre-launch actions open for editing.
 let actEdit = null;
@@ -233,8 +247,10 @@ function viewLayout(){
         </div>
         <div style="display:flex;gap:8px;margin-top:10px">
           <select data-addsel="${si}" style="flex-grow:1">
-            ${ADDABLE.map(([kr, name]) =>
-              `<option value="${kr}">${esc(name)}</option>`).join('')}
+            ${[...new Set(ADDABLE.map(a => a[4]))].map(g => `<optgroup label="${g}">${
+              ADDABLE.filter(a => a[4] === g).map(([kr, name]) => addedAlready(kr)
+                ? `<option value="${kr}" disabled>${esc(name)} (added)</option>`
+                : `<option value="${kr}">${esc(name)}</option>`).join('')}</optgroup>`).join('')}
           </select>
           <button class="btn sm" data-add="${si}">Add tile</button>
         </div>
@@ -269,6 +285,7 @@ function viewLayout(){
       const spec = ADDABLE.find(a => a[0] === sel.value);
       if (!spec) return;
       const [kr, name, w, h] = spec;
+      if (addedAlready(kr)){ toast(name + ' is already on the remote'); return; }
       const [kind, ref] = kr.split(':');
       L.sections[si].tiles.push({ kind, ref, label: name, w, h });
       await saveLayout(true); viewLayout();

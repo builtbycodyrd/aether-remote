@@ -43,7 +43,8 @@ From then on your phone has a grid of tiles you arrange yourself:
   thumbnails, previews of photos, video, music, PDFs and text. Pick several
   and download them as one zip, or upload from the phone into your own
   folders (it asks for Face ID / your PIN first).
-- **Media and power keys** — play/pause, skip, lock, sleep, screen off.
+- **Media and power keys** — play/pause, skip, back/forward 10 or 30
+  seconds, lock, sleep, screen off.
 - **The whole desktop, live and usable.** Full screen, tap to click, hold to
   right-click, two fingers to scroll. Tap the box at the bottom and your
   phone's own keyboard types straight into whatever is focused on the PC —

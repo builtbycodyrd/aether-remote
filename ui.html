@@ -49,6 +49,13 @@
     body{border-left:1px solid var(--line);border-right:1px solid var(--line)}
   }
   body.editing{-webkit-user-select:none}
+  /* Pictures in the app are buttons, not images to save. */
+  img{-webkit-touch-callout:none;-webkit-user-drag:none}
+  .tile{-webkit-touch-callout:none}
+  .list .grp{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--accent2);
+    opacity:.8;margin:14px 0 2px}
+  .list .it.added{opacity:.45}
+  .list .it.added .ch{font-size:11px}
   body::before{content:"";position:fixed;inset:-25%;z-index:-2;
     background:
       radial-gradient(40vmax 40vmax at 18% 8%, color-mix(in srgb, var(--primary) 24%, transparent), transparent 62%),
@@ -182,6 +189,11 @@
     touch-action:none;overscroll-behavior:none;user-select:none;
     -webkit-user-select:none}
   #fs.on{display:block}
+  /* Holding on the picture is a right-click - never iOS's own "Copy / Save
+     Image" menu on top of it (that was the second Copy). */
+  #fs,#fs *{-webkit-touch-callout:none}
+  #fs input,#fs textarea{-webkit-touch-callout:default}
+  #fsFeed{-webkit-user-drag:none;user-select:none}
   #fsFeed{position:absolute;inset:0;width:100%;height:100%;
     object-fit:contain;display:block;background:#000}
   #fsRing{position:absolute;width:38px;height:38px;border-radius:50%;
@@ -729,6 +741,8 @@
   .npf .np-seek{padding-top:0}
   .npf .np-times{font-size:12px}
   .npf .np-ctl{gap:44px;padding:4px 0}
+  .npf .np-ctl-full{gap:0;justify-content:space-between;padding:4px 6px}
+  .npf .np-b.np-sk svg{width:30px;height:30px}
   .npf .np-b svg{width:34px;height:34px}
   .npf .np-b.np-pp svg{width:56px;height:56px}
   .npf-volrow{display:flex;align-items:center;gap:12px;color:rgba(255,255,255,.7)}

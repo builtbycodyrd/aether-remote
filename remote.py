@@ -1319,6 +1319,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not (op and ref.startswith("media.") and
                         media.now_playing() and media.command(op)[0]):
                     sysctl.tap_key(key)
+            elif spec["kind"] == "seek":
+                ok, err = media.skip(spec["delta"])
+                if not ok:
+                    return self._send(409, {"error": err})
+                return self._send(200, {"ok": True, "nowplaying": media.now_playing()})
             elif spec["kind"] == "screenoff":
                 sysctl.screen_off()
             elif spec["kind"] == "power":

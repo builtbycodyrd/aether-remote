@@ -241,9 +241,17 @@ def listing(p):
     if not p:
         return {"path": "", "up": None, "home": True, "places": places(),
                 "drives": drives(), "entries": []}
+    # A drive's root has no parent folder - its "up" is the Files home. (Asking
+    # for "C:" without the slash means "the current folder on C:", which is
+    # how the back button used to land somewhere random.)
+    if re.match(r"^[A-Za-z]:\\?$", p.strip()):
+        p = p.strip()[:2] + "\\"
     p = os.path.abspath(p)
-    up = os.path.dirname(p.rstrip("\\"))
-    up = up if up and up != p else ""
+    if re.match(r"^[A-Za-z]:\\$", p):
+        up = ""
+    else:
+        up = os.path.dirname(p.rstrip("\\"))
+        up = up if up and up != p else ""
     if not readable(p):
         return {"path": p, "up": up, "entries": [], "error": "That folder is off limits to the phone."}
     if not os.path.isdir(p):

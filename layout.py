@@ -29,6 +29,12 @@ ACTIONS = {
     "media.playpause": {"label": "Play/Pause", "kind": "key"},
     "media.next":      {"label": "Next", "kind": "key"},
     "media.prev":      {"label": "Previous", "kind": "key"},
+    # Jump within what's playing (the Now Playing session), like the
+    # double-tap on a phone's video player.
+    "media.back10":    {"label": "Back 10s", "kind": "seek", "delta": -10},
+    "media.fwd10":     {"label": "Forward 10s", "kind": "seek", "delta": 10},
+    "media.back30":    {"label": "Back 30s", "kind": "seek", "delta": -30},
+    "media.fwd30":     {"label": "Forward 30s", "kind": "seek", "delta": 30},
     "screen.off":      {"label": "Screen off", "kind": "screenoff"},
     "power.lock":      {"label": "Lock PC", "kind": "power"},
     "power.sleep":     {"label": "Sleep", "kind": "power"},
@@ -105,6 +111,32 @@ def real_exe(path):
     return path
 
 
+_store_dirs = {}
+
+
+def _store_install(path):
+    """%LOCALAPPDATA%\\Microsoft\\WindowsApps\\<Package_family>\\App.exe is only
+    a launcher alias; ask Windows where that package really lives."""
+    m = re.search(r"\\microsoft\\windowsapps\\([^\\]+_[a-z0-9]{13})\\", path.lower())
+    if not m:
+        return None
+    name = m.group(1).rsplit("_", 1)[0]
+    if name not in _store_dirs:
+        loc = ""
+        if re.fullmatch(r"[a-z0-9.\-]+", name):
+            try:
+                loc = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     "(Get-AppxPackage -Name '%s' | Select-Object -First 1).InstallLocation" % name],
+                    capture_output=True, text=True, timeout=15,
+                    creationflags=0x08000000).stdout.strip()
+            except Exception:
+                loc = ""
+        _store_dirs[name] = loc
+    loc = _store_dirs[name]
+    return os.path.join(loc, "app.exe") if loc else None
+
+
 def icon_for(path):
     """Extract an app's icon to a PNG we can serve. Cached by path.
 
@@ -114,6 +146,16 @@ def icon_for(path):
     """
     if not path:
         return None
+    if "\\windowsapps\\" in os.path.normpath(path).lower():
+        # Store apps (Spotify from the Store, Xbox games): the exe's own icon
+        # is blank - the package's logo is the real one.
+        try:
+            import media
+            logo = media._store_logo(_store_install(os.path.normpath(path)) or os.path.normpath(path))
+            if logo:
+                return logo
+        except Exception:
+            pass
     os.makedirs(ICON_DIR, exist_ok=True)
     key = "".join(c if c.isalnum() else "_" for c in path)[-90:]
     out = os.path.join(ICON_DIR, key + ".png")

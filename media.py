@@ -232,7 +232,9 @@ def _store_logo(exe):
                     or "contrast" in fl:
                 continue
             # "unplated" is the bare icon, without a coloured square behind it.
-            s = os.path.getsize(os.path.join(d, fn)) + (1 << 30 if "unplated" in fl else 0)
+            # "light" variants are drawn for light backgrounds - wrong on ours.
+            s = os.path.getsize(os.path.join(d, fn)) + (1 << 30 if "unplated" in fl else 0) \
+                - (1 << 31 if "light" in fl else 0)
             if s > size:
                 best, size = os.path.join(d, fn), s
         return best
@@ -671,6 +673,19 @@ def command(op, pos=None):
     # Read again straight away so the phone's next poll sees the change.
     _want["at"] = time.time()
     return bool(ok), (None if ok else "the app refused")
+
+
+def skip(delta):
+    """Jump forward/back `delta` seconds in whatever Now Playing shows."""
+    cur = now_playing()
+    if not cur:
+        return False, "Nothing is playing"
+    if cur.get("kind") == "game":
+        return False, "That's a game - there's nothing to skip"
+    if not (cur.get("can") or {}).get("seek") or not cur.get("dur"):
+        return False, "%s doesn't let other apps skip" % (cur.get("appName") or "That app")
+    target = max(0.0, min(float(cur["dur"]) - 1, float(cur["pos"]) + float(delta)))
+    return command("seek", target)
 
 
 def refresh_now(timeout=3.0):
