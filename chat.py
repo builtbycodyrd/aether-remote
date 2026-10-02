@@ -482,6 +482,10 @@ def _openai_turn(c, system, msgs, defs, emit):
             "messages": [{"role": "system", "content": system}] + msgs}
     # OpenAI's newer models only take max_completion_tokens; others the old name.
     body["max_completion_tokens" if c["provider"] == "openai" else "max_tokens"] = MAX_TOKENS
+    if c["provider"] == "ollama":
+        # Local "thinking" models (Qwen 3.5 and co.) otherwise reason first,
+        # silently, for most of a minute - and can spend every token on it.
+        body["reasoning_effort"] = "none"
     if defs:
         body["tools"] = [{"type": "function", "function": {
             "name": n, "description": d,

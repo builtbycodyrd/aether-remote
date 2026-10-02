@@ -498,6 +498,7 @@ def _stat_loop():
         with _stat_lock:
             _stat_cache["cpu"] = cpu
             _stat_cache["gpu"] = gpu
+            _stat_cache["ticks"] = i
 
 
 def _ensure_sampler():
@@ -544,11 +545,20 @@ def _na(label):
     return {"label": label, "big": "—", "unit": "", "pct": 0, "na": True}
 
 
-def system_stats():
+def system_stats(wait=False):
     """One dict keyed by what a stat tile can name (cpu/ram/disk/gpu/temp/
     battery). Each entry is {label, big, unit, pct} so the phone renders any
-    of them the same way - a number, a small unit, and a bar driven by pct."""
+    of them the same way - a number, a small unit, and a bar driven by pct.
+    wait=True gives a sampler that has just started time for its first
+    reading (the chat asks once; a tile just polls again)."""
     _ensure_sampler()
+    if wait:
+        until = time.time() + 4
+        while time.time() < until:
+            with _stat_lock:
+                if _stat_cache.get("ticks"):
+                    break
+            time.sleep(0.2)
     with _stat_lock:
         cpu = _stat_cache.get("cpu")
         gpu = _stat_cache.get("gpu")

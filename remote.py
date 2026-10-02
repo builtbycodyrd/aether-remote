@@ -2185,7 +2185,7 @@ class Handler(BaseHTTPRequestHandler):
             n = media.now_playing()
             g = media.current_game()
             return {"volume": st["volume"], "muted": st["muted"], "output": st.get("device"),
-                    "stats": {k: "%s %s" % (v["big"], v["unit"]) for k, v in sysctl.system_stats().items()
+                    "stats": {k: "%s %s" % (v["big"], v["unit"]) for k, v in sysctl.system_stats(wait=True).items()
                               if not v.get("na")},
                     "now_playing": n and {k: n.get(k) for k in ("title", "artist", "appName", "playing", "pos", "dur")},
                     "game": g and {"name": g["title"], "minutes_played": int(g["pos"] // 60)},
