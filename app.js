@@ -441,6 +441,13 @@ function tileInner(t){
   case 'nowplaying':
     return nowPlayingInner(t);
 
+  case 'timer': return timerInner(t);
+  case 'appvol': return appvolInner(t);
+  case 'audioout': return audiooutInner(t);
+  case 'windows': return windowsInner(t);
+  case 'gamestats': return gamestatsInner(t);
+  case 'chat': return chatInner(t);
+
   case 'guest':
     return guestInner(t);
 
@@ -886,6 +893,16 @@ function iconFor(ref){
     'media.playpause': `<svg ${s}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
     'media.next': `<svg ${s}><path d="M5 4l10 8-10 8z"/><path d="M19 5v14"/></svg>`,
     'media.prev': `<svg ${s}><path d="M19 4L9 12l10 8z"/><path d="M5 5v14"/></svg>`,
+    'micmute': `<svg ${s}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`,
+    'discord.mute': `<svg ${s}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M4 4l16 16"/></svg>`,
+    'discord.deafen': `<svg ${s}><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.6"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.6"/><path d="M3 3l18 18"/></svg>`,
+    'screen.shot': `<svg ${s}><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
+    'timer': XI.moon.replace('<svg', '<svg width="20" height="20"'),
+    'appvol': XI.mixer.replace('<svg', '<svg width="20" height="20"'),
+    'audioout': XI.headset.replace('<svg', '<svg width="20" height="20"'),
+    'windows': XI.windows.replace('<svg', '<svg width="20" height="20"'),
+    'gamestats': XI.pad.replace('<svg', '<svg width="20" height="20"'),
+    'chat': XI.spark.replace('<svg', '<svg width="20" height="20"'),
     'media.back10': `<svg ${s}><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">10</text></svg>`,
     'media.fwd10': `<svg ${s}><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">10</text></svg>`,
     'media.back30': `<svg ${s}><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">30</text></svg>`,
@@ -920,6 +937,7 @@ function toggleOn(ref){
   if (!S) return false;
   if (ref === 'mute') return !!S.muted;
   if (ref === 'keeper') return !!(S.keeper && S.keeper.enabled);
+  if (ref === 'micmute') return !!(S.mic && S.mic.muted);
   return false;
 }
 
@@ -971,10 +989,12 @@ function tileHTML(t, secId){
   if (!editing && t.kind === 'toggle' && toggleOn(t.ref)) cls.push('on');
   if (t.kind === 'action' && /restart|shutdown|signout/.test(t.ref)) cls.push('danger');
   if (t.kind === 'service' || t.kind === 'docker') cls.push('danger');
-  if (t.kind === 'nowplaying') cls.push('npt');
+  if (t.kind === 'nowplaying' || t.kind === 'gamestats') cls.push('npt');
+  if (!editing && t.kind === 'timer' && S && S.timer && S.timer.on) cls.push('on');
+  if (t.accent) cls.push('acc');
   if (armed === t.id) cls.push('armed');
   return `<div class="${cls.join(' ')}" data-tile="${t.id}" data-sec="${secId}"
-    style="grid-column:span ${t.w};grid-row:span ${t.h}">
+    style="grid-column:span ${t.w};grid-row:span ${t.h}${t.accent ? ';--acc:' + t.accent : ''}">
     ${tileInner(t)}
     ${editing ? '<div class="rm" data-rm="1"><b></b></div><div class="rs" data-rs="1"></div>' : ''}
   </div>`;
@@ -1042,6 +1062,15 @@ function refresh(){
         if (NP.scrub) continue;
         const k = npKey(t);
         if (el._npk !== k){ el.innerHTML = tileInner(t); el._npk = k; }
+      }
+
+      else if (['timer', 'appvol', 'audioout', 'windows', 'gamestats', 'chat'].includes(t.kind)){
+        // Only when something visible changed (the clocks tick on their own).
+        if (t.kind === 'appvol' && MX.drag) continue;
+        const html = tileInner(t);
+        const key = html.replace(/(class="(?:gs-t|tm-left)"[^>]*>)[^<]*/g, '$1');
+        if (el._xk !== key){ el.innerHTML = html; el._xk = key; }
+        el.classList.toggle('on', t.kind === 'timer' && !!(S.timer && S.timer.on));
       }
 
       else if (t.kind === 'guest' || t.kind === 'service' || t.kind === 'docker'){
@@ -1126,7 +1155,7 @@ board.addEventListener('input', e => {
 board.addEventListener('contextmenu', e => { if (e.target.closest('[data-tile]')) e.preventDefault(); });
 let pressTimer = null, pressStart = null;
 board.addEventListener('pointerdown', e => {
-  if (editing || e.target.closest('[data-slider]')) return;
+  if (editing || e.target.closest('[data-slider]') || e.target.closest('.mxr')) return;
   const el = e.target.closest('[data-tile]');
   if (!el) return;
   pressStart = { x: e.clientX, y: e.clientY, id: el.dataset.tile };
@@ -1148,7 +1177,7 @@ board.addEventListener('pointermove', e => {
 
 /* Tap */
 board.addEventListener('click', async e => {
-  if (e.target.closest('[data-slider]')) return;
+  if (e.target.closest('[data-slider]') || e.target.closest('.mxr')) return;
 
   const addSec = e.target.closest('[data-addtile]');
   if (addSec){ openAdd(addSec.dataset.addtile); return; }
@@ -1174,6 +1203,23 @@ board.addEventListener('click', async e => {
 
   if (t.kind === 'stream'){ openDesktop(t); return; }
   if (t.kind === 'nowplaying'){ openNowPlaying(); return; }
+  if (t.kind === 'chat'){ if (CH.info && CH.info.ready) showTab('chat'); else toast('Set the chat up in the PC app → Settings → Chatbox'); return; }
+  if (t.kind === 'windows'){ openWindows(); return; }
+  if (t.kind === 'gamestats'){ openDesktop({ ref: '0' }); return; }
+  if (t.kind === 'appvol'){
+    const ic = e.target.closest('.mx-ic'), row = e.target.closest('[data-mxapp]');
+    if (ic && row && row.dataset.mxapp){
+      const a = MX.apps.find(x => x.app === row.dataset.mxapp);
+      if (a) api('/api/mixer', { app: a.app, mute: !a.muted }).then(() => { a.muted = !a.muted; toast((a.muted ? 'Muted ' : 'Unmuted ') + a.name); return mxPoll(); })
+        .then(() => refresh()).catch(err => toast(err.message));
+    }
+    return;
+  }
+  if (t.kind === 'timer' || t.kind === 'audioout'){
+    (t.kind === 'timer' ? timerTap(t) : audiooutTap(t)).catch(err => { if (err.message !== 'Cancelled') toast(err.message); });
+    return;
+  }
+  if (t.kind === 'action' && t.ref === 'screen.shot'){ takeScreenshot(); return; }
   if (t.kind === 'slider') return;
   if (t.kind === 'guest'){ openGuest(t); return; }
   if (t.kind === 'link'){
@@ -1200,11 +1246,14 @@ board.addEventListener('click', async e => {
   try {
     const body = { kind: t.kind, ref: t.ref, id: t.id };
     if (destructive) body.confirm = true;
-    if (t.kind === 'toggle' && t.ref === 'keeper' && S) body.target = S.volume;
+    if (t.kind === 'toggle' && t.ref === 'keeper' && S)
+      body.target = t.opts && t.opts.target != null ? t.opts.target : S.volume;
     const r = await api('/api/tile', body);
     if (r && r.volume !== undefined) S = r;
     if (r && r.nowplaying && S){ S.nowplaying = r.nowplaying; npPaint(); }
     if (t.kind === 'scene') toast('Running ' + t.label);
+    if (t.kind === 'toggle' && t.ref === 'micmute') toast(toggleOn('micmute') ? 'Microphone muted' : 'Microphone on');
+    if (t.kind === 'action' && t.ref.startsWith('discord.')) toast(t.ref === 'discord.mute' ? 'Discord mute toggled' : 'Discord deafen toggled');
     if (restart) toast('Restarting ' + t.label);
     render();
   } catch(err){
@@ -1218,7 +1267,7 @@ function enterEdit(){
   editing = true; dirty = false;
   document.body.classList.add('editing');
   render();
-  toast('Drag to move · corner to resize');
+  toast('Drag to move · hold for settings');
 }
 function exitEdit(save){
   editing = false;
@@ -1265,7 +1314,15 @@ board.addEventListener('pointerdown', e => {
     return;
   }
 
-  dragging = { mode: 'move', id: found.t.id, moved: false };
+  dragging = { mode: 'move', id: found.t.id, moved: false, x0: e.clientX, y0: e.clientY };
+  // Hold still on a tile = its settings. Moving first = dragging it.
+  clearTimeout(editHold);
+  const holdId = found.t.id;
+  editHold = setTimeout(() => {
+    if (!dragging || dragging.moved || dragging.id !== holdId) return;
+    dragging = null;
+    openTileSettings(holdId);
+  }, 480);
   // Capture on the tile keeps the gesture alive even as the board re-renders.
   try { el.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
@@ -1292,7 +1349,9 @@ window.addEventListener('pointermove', e => {
 
   // ---- move: a ghost floats under the finger, the others reflow ----
   const cur = board.querySelector(`[data-tile="${dragging.id}"]`);
+  if (!dragging.moved && Math.hypot(e.clientX - dragging.x0, e.clientY - dragging.y0) < 8) return;
   if (!dragging.moved){
+    clearTimeout(editHold);
     if (!cur) return;
     const r = cur.getBoundingClientRect();
     dragging.moved = true;
@@ -1336,7 +1395,9 @@ window.addEventListener('pointermove', e => {
   if (again) again.classList.add('placeholder');
 });
 
+let editHold = null;
 ['pointerup', 'pointercancel'].forEach(ev => window.addEventListener(ev, () => {
+  clearTimeout(editHold);
   if (!dragging) return;
   if (dragging.ghost) dragging.ghost.remove();
   document.body.classList.remove('dragging');
@@ -1378,6 +1439,9 @@ function openSheet(title, bodyHTML, footHTML){
   $('#scrim').classList.add('show');
 }
 function closeSheet(){
+  const after = sheetOnClose;
+  sheetOnClose = null;
+  if (after){ try { after(); } catch(e){} }
   $('#sheet').classList.remove('show');
   $('#scrim').classList.remove('show');
   sheetCtx = null;
@@ -1469,6 +1533,9 @@ const CONTROLS = [
   { g:'Sound', kind:'slider', ref:'volume', label:'Volume', w:4, h:1 },
   { g:'Sound', kind:'toggle', ref:'mute', label:'Mute', w:1, h:1 },
   { g:'Sound', kind:'toggle', ref:'keeper', label:'Lock volume', w:2, h:1 },
+  { g:'Sound', kind:'appvol', ref:'', label:'Volume mixer', w:4, h:2, multi:true },
+  { g:'Sound', kind:'audioout', ref:'', label:'Audio output', w:2, h:1 },
+  { g:'Sound', kind:'toggle', ref:'micmute', label:'Mic', w:1, h:1 },
   { g:'Media', kind:'nowplaying', ref:'', label:'Now playing', w:4, h:2 },
   { g:'Media', kind:'action', ref:'media.playpause', label:'Play/Pause', w:1, h:1 },
   { g:'Media', kind:'action', ref:'media.prev', label:'Previous', w:1, h:1 },
@@ -1477,14 +1544,22 @@ const CONTROLS = [
   { g:'Media', kind:'action', ref:'media.fwd10', label:'Forward 10s', w:1, h:1 },
   { g:'Media', kind:'action', ref:'media.back30', label:'Back 30s', w:1, h:1 },
   { g:'Media', kind:'action', ref:'media.fwd30', label:'Forward 30s', w:1, h:1 },
+  { g:'Media', kind:'timer', ref:'', label:'Sleep timer', w:2, h:1, multi:true, opts:{ minutes:30, action:'pause' } },
   { g:'Screen', kind:'stream', ref:'0', label:'Desktop', w:4, h:2 },
   { g:'Screen', kind:'action', ref:'screen.off', label:'Screen off', w:1, h:1 },
+  { g:'Screen', kind:'action', ref:'screen.shot', label:'Screenshot', w:1, h:1 },
+  { g:'Screen', kind:'windows', ref:'', label:'Open windows', w:4, h:2 },
+  { g:'Games & apps', kind:'gamestats', ref:'', label:'In-game', w:4, h:2 },
+  { g:'Games & apps', kind:'chat', ref:'', label:'AI chat', w:4, h:2 },
+  { g:'Games & apps', kind:'action', ref:'discord.mute', label:'Discord mute', w:1, h:1 },
+  { g:'Games & apps', kind:'action', ref:'discord.deafen', label:'Discord deafen', w:1, h:1 },
   { g:'Stats', kind:'stat', ref:'cpu', label:'CPU', w:2, h:1 },
   { g:'Stats', kind:'stat', ref:'gpu', label:'GPU', w:2, h:1 },
   { g:'Stats', kind:'stat', ref:'ram', label:'RAM', w:2, h:1 },
   { g:'Stats', kind:'stat', ref:'disk', label:'Disk', w:2, h:1 },
   { g:'Stats', kind:'stat', ref:'temp', label:'Temp', w:2, h:1 },
   { g:'Stats', kind:'stat', ref:'battery', label:'Battery', w:2, h:1 },
+  { g:'Stats', kind:'stat', ref:'net', label:'Network', w:2, h:1 },
   { g:'Power', kind:'action', ref:'power.lock', label:'Lock PC', w:2, h:1 },
   { g:'Power', kind:'action', ref:'power.sleep', label:'Sleep', w:2, h:1 },
   { g:'Power', kind:'action', ref:'power.restart', label:'Restart', w:2, h:1 },
@@ -1495,6 +1570,7 @@ const CONTROLS = [
 /* Is this control already somewhere on the remote? Two Volume sliders or two
    Now Playing cards are never what anyone wants, so the catalog says so. */
 function onBoard(x){
+  if (x.multi) return false;
   return !!L && L.sections.some(s => s.tiles.some(t =>
     t.kind === x.kind && String(t.ref || '') === String(x.ref || '')));
 }
@@ -1576,7 +1652,7 @@ function drawAdd(){
     bodyHTML += `<div class="list" style="margin-top:6px">
       ${CONTROLS.map((x,i) => `${i === 0 || CONTROLS[i - 1].g !== x.g
           ? `<div class="grp">${esc(x.g)}</div>` : ''}<div class="it ${onBoard(x) ? 'added' : ''}" data-ctrl="${i}">
-        ${iconFor(x.kind === 'nowplaying' ? 'nowplaying' : x.kind === 'stream' ? 'stream' : x.ref)}
+        ${iconFor(['nowplaying', 'stream', 'timer', 'appvol', 'audioout', 'windows', 'gamestats', 'chat'].includes(x.kind) ? x.kind : x.ref)}
         <div class="nm">${esc(x.label)}<div class="sub">${x.w} × ${x.h}</div></div>
         <div class="ch">${onBoard(x) ? 'Added' : '+'}</div></div>`).join('')}</div>`;
   } else {
@@ -1722,7 +1798,8 @@ $('#sheetBody').addEventListener('click', async e => {
   if (ctrl){
     const spec = CONTROLS[+ctrl.dataset.ctrl];
     if (onBoard(spec)){ toast(spec.label + ' is already on your remote'); return; }
-    const { g, ...tile } = spec;
+    const { g, multi, ...tile } = spec;
+    if (tile.opts) tile.opts = { ...tile.opts };
     addTiles([{ ...tile, id: 't' + Math.random().toString(36).slice(2,10) }]);
     return;
   }
@@ -1985,6 +2062,12 @@ function openSettings(){
       <div style="color:var(--muted);font-size:12px">${sf.enabled ? 'Change' : 'Set up'}</div></div>
 
     ${isPC() ? `<div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
+      text-transform:uppercase;margin:20px 0 9px">Notifications</div>
+    <div class="srow" id="ntRow" style="cursor:pointer"><div style="flex-grow:1">
+      <div class="t">Notifications</div>
+      <div class="d">Choose what's worth a buzz, and how loud</div></div>
+      <div style="color:var(--muted);font-size:12px">Open</div></div>
+    <div style="font-size:10px;letter-spacing:1px;color:var(--accent2);
       text-transform:uppercase;margin:20px 0 9px">Now Playing</div>
     <div class="srow" id="jfRow" style="cursor:pointer"><div style="flex-grow:1">
       <div class="t">Jellyfin &amp; Moonfin</div>
@@ -2081,6 +2164,7 @@ $('#sheetBody').addEventListener('click', async e => {
     return;
   }
   if (e.target.closest('#jfRow')){ openJellyfin(); return; }
+  if (e.target.closest('#ntRow')){ openNotifications(); return; }
   const m = e.target.closest('[data-mode]');
   if (m){ L.mode = m.dataset.mode; saveThemeSoon(); openSettings(); render(); return; }
 
@@ -3802,12 +3886,19 @@ function fvBuild(){
 
 /* The tab bar: Remote | Files. PCs only - the homelab has no files to show. */
 function showTab(which){
-  const files = which === 'files';
+  const files = which === 'files', chatOn = which === 'chat';
   if (files && !fvEl()) fvBuild();
   if (files && !FV.data) fvGo('');
+  if (chatOn && !chEl()){ chBuild(); chDraw(); }
   document.body.classList.toggle('filesOn', files);
+  document.body.classList.toggle('chatOn', chatOn);
   const f = fvEl();
   if (f) f.classList.toggle('show', files);
+  const c = chEl();
+  if (c){
+    c.classList.toggle('show', chatOn);
+    if (chatOn){ chDraw(); if (window.visualViewport){ c.style.height = visualViewport.height + 'px'; } }
+  }
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === which));
   if (!files) fvCloseView();
 }
@@ -3833,6 +3924,684 @@ function setupTabs(){
   });
 }
 
+/* ================= 1.5: new tiles, tile settings, notifications, chat ================= */
+
+/* ---- small shared bits ---- */
+const XI = {
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+  mixer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2.2" fill="var(--panel)"/><circle cx="12" cy="8" r="2.2" fill="var(--panel)"/><circle cx="18" cy="16" r="2.2" fill="var(--panel)"/></svg>',
+  speaker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><circle cx="12" cy="14" r="3.5"/><path d="M12 7h.01"/></svg>',
+  headset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.6"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.6"/></svg>',
+  windows: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="13" height="10" rx="2"/><rect x="8" y="9" width="13" height="10" rx="2" fill="var(--panel)"/></svg>',
+  pad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12a4 4 0 0 1 3.9 4.9l-.9 4a2.5 2.5 0 0 1-4.3 1.1L14.5 16h-5l-2.2 2a2.5 2.5 0 0 1-4.3-1.1l-.9-4A4 4 0 0 1 6 8z"/><path d="M8 11v3M6.5 12.5h3M15.5 12h.01M17.5 13.5h.01"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4a1 1 0 0 1 .7.3l6 6a1 1 0 0 1-1.4 1.4L13 7.4V19a1 1 0 1 1-2 0V7.4l-4.3 4.3a1 1 0 0 1-1.4-1.4l6-6A1 1 0 0 1 12 4z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/></svg>',
+};
+const mmss = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`; };
+const shortDev = n => String(n || '').replace(/^(Speakers|Headphones|Headset|Speaker)\s*\((.*)\)$/i, '$2') || 'Output';
+const devIcon = n => /head/i.test(n || '') ? XI.headset : XI.speaker;
+const TIMER_ACTS = [['pause', 'Pause media'], ['mute', 'Mute'], ['screenoff', 'Screen off'], ['lock', 'Lock'], ['sleep', 'Sleep'], ['shutdown', 'Shut down']];
+
+/* ---- sleep timer ---- */
+function timerInner(t){
+  const T = S && S.timer, o = t.opts || {};
+  const min = o.minutes || 30, act = (TIMER_ACTS.find(a => a[0] === (o.action || 'pause')) || TIMER_ACTS[0])[1];
+  if (T && T.on){
+    const what = (TIMER_ACTS.find(a => a[0] === T.action) || [0, ''])[1];
+    return `<div class="xt xt-timer on"><div class="xt-ic">${XI.moon}</div>
+      <div class="xt-main"><div class="xt-big tm-left" data-at="${T.at}">${mmss(T.left)}</div>
+      <div class="xt-sub">then ${esc(what.toLowerCase())} · tap to cancel</div></div></div>`;
+  }
+  if (t.w === 1) return `<div class="ico">${XI.moon.replace('<svg', '<svg width="20" height="20"')}<div class="lab">${min}m</div></div>`;
+  return `<div class="xt xt-timer"><div class="xt-ic">${XI.moon}</div>
+    <div class="xt-main"><div class="xt-nm">${esc(t.label || 'Sleep timer')}</div>
+    <div class="xt-sub">${min} min · ${esc(act)}</div></div></div>`;
+}
+setInterval(() => {
+  document.querySelectorAll('.tm-left').forEach(e => {
+    const left = (+e.dataset.at) - Date.now() / 1000 + (S && S._skew || 0);
+    const v = mmss(left);
+    if (e.textContent !== v) e.textContent = v;
+  });
+}, 1000);
+
+async function timerTap(t){
+  const T = S && S.timer;
+  if (T && T.on){
+    S.timer = await api('/api/timer/cancel', {});
+    toast('Sleep timer cancelled');
+  } else {
+    const o = t.opts || {};
+    S.timer = await api('/api/timer', { minutes: o.minutes || 30, action: o.action || 'pause' });
+    const what = (TIMER_ACTS.find(a => a[0] === S.timer.action) || [0, ''])[1];
+    toast(`${what} in ${o.minutes || 30} min`);
+  }
+  refresh(true);
+}
+
+/* ---- volume mixer / one app's volume ---- */
+const MX = { apps: [], at: 0, drag: null, pending: {}, sending: false };
+const mxIcon = a => a && a.icon ? `<img src="/api/appicon?k=${a.icon}" alt="" onerror="this.style.visibility='hidden'">` : '';
+function mxRow(a, label){
+  const v = a ? (a.muted ? 0 : a.volume) : 0;
+  return `<div class="mx-row ${a ? '' : 'idle'}" data-mxapp="${esc(a ? a.app : '')}">
+    <div class="mx-ic">${a ? mxIcon(a) : XI.mixer}</div>
+    <div class="mx-mid"><div class="mx-nm">${esc(label || (a && a.name) || 'App')}</div>
+      ${a ? `<input type="range" class="mxr" min="0" max="100" value="${v}" style="--pct:${v}%" data-mx="${esc(a.app)}" aria-label="${esc(a.name)} volume">`
+          : '<div class="mx-off">Not playing sound</div>'}</div>
+    ${a ? `<div class="mx-v">${v}</div>` : ''}</div>`;
+}
+function appvolInner(t){
+  if (t.ref){
+    const a = MX.apps.find(x => x.app === t.ref);
+    return `<div class="mx one">${mxRow(a, t.label)}</div>`;
+  }
+  const rows = MX.apps.length ? MX.apps.map(a => mxRow(a)).join('')
+    : `<div class="mx-empty">${XI.mixer}<span>Nothing is playing sound</span></div>`;
+  return `<div class="mx all"><div class="mx-h">${esc(t.label || 'Volume mixer')}</div><div class="mx-list">${rows}</div></div>`;
+}
+async function mxPoll(){
+  if (!L || !L.sections.some(s => s.tiles.some(t => t.kind === 'appvol'))) return;
+  if (MX.drag) return;
+  try { MX.apps = (await api('/api/mixer')).apps; MX.at = Date.now(); } catch(e){}
+}
+function mxFlush(){
+  if (MX.sending) return;
+  const app = Object.keys(MX.pending)[0];
+  if (!app) return;
+  const v = MX.pending[app]; delete MX.pending[app];
+  MX.sending = true;
+  api('/api/mixer', { app, volume: v }).catch(err => toast(err.message))
+    .finally(() => { MX.sending = false; setTimeout(mxFlush, 50); });
+}
+board.addEventListener('input', e => {
+  const r = e.target.closest('.mxr');
+  if (!r) return;
+  const v = +r.value;
+  r.style.setProperty('--pct', v + '%');
+  const row = r.closest('.mx-row'), lab = row && row.querySelector('.mx-v');
+  if (lab) lab.textContent = v;
+  const a = MX.apps.find(x => x.app === r.dataset.mx);
+  if (a){ a.volume = v; a.muted = false; }
+  MX.pending[r.dataset.mx] = v;
+  mxFlush();
+});
+['pointerdown', 'touchstart'].forEach(ev => board.addEventListener(ev, e => {
+  if (e.target.closest('.mxr')) MX.drag = Date.now();
+}, { passive: true }));
+['pointerup', 'touchend', 'touchcancel'].forEach(ev => window.addEventListener(ev, () => {
+  if (MX.drag) setTimeout(() => { MX.drag = null; }, 800);
+}, { passive: true }));
+
+/* ---- audio output ---- */
+function audiooutInner(t){
+  const name = S && S.device || 'Output';
+  if (t.w === 1) return `<div class="ico">${devIcon(name).replace('<svg', '<svg width="20" height="20"')}<div class="lab">${esc(shortDev(name))}</div></div>`;
+  return `<div class="xt"><div class="xt-ic">${devIcon(name)}</div>
+    <div class="xt-main"><div class="xt-nm">${esc(shortDev(name))}</div><div class="xt-sub">Tap to switch output</div></div></div>`;
+}
+async function audiooutTap(t){
+  const all = (S && S.devices) || [];
+  const pick = ((t.opts && t.opts.devices) || []).filter(id => all.some(d => d.id === id));
+  const ring = pick.length ? pick : all.map(d => d.id);
+  if (ring.length < 2){ toast('Only one output to choose from'); return; }
+  const cur = all.find(d => d.default);
+  const i = ring.indexOf(cur && cur.id);
+  const next = ring[(i + 1) % ring.length];
+  const r = await api('/api/audio/default', { id: next });
+  S.devices = r.devices;
+  const d = r.devices.find(x => x.id === next);
+  S.device = d ? d.name : S.device;
+  toast('Output: ' + shortDev(S.device));
+  refresh(true);
+}
+
+/* ---- open windows ---- */
+const WN = { list: [], at: 0 };
+function windowsInner(t){
+  const n = WN.list.length;
+  if (t.h >= 2 && t.w >= 2 && n){
+    const max = t.w * t.h * 2;
+    return `<div class="wn"><div class="mx-h">${esc(t.label || 'Open windows')}</div><div class="wn-grid">${
+      WN.list.slice(0, max).map(w => `<button class="wn-it" data-hwnd="${w.hwnd}" title="${esc(w.title)}">
+        ${w.icon ? `<img src="/api/appicon?k=${w.icon}" alt="" onerror="this.outerHTML=XI.windows">` : XI.windows}
+        <span>${esc(w.name)}</span></button>`).join('')}</div></div>`;
+  }
+  if (t.w === 1) return `<div class="ico">${XI.windows.replace('<svg', '<svg width="20" height="20"')}<div class="lab">${n || ''} open</div></div>`;
+  return `<div class="xt"><div class="xt-ic">${XI.windows}</div><div class="xt-main">
+    <div class="xt-nm">${esc(t.label || 'Open windows')}</div><div class="xt-sub">${n ? n + ' open · tap to switch' : 'Tap to switch'}</div></div></div>`;
+}
+async function wnPoll(force){
+  if (!force && (!L || !L.sections.some(s => s.tiles.some(t => t.kind === 'windows')))) return;
+  if (!force && Date.now() - WN.at < 6000) return;
+  try { WN.list = (await api('/api/windows')).windows; WN.at = Date.now(); } catch(e){}
+}
+async function openWindows(){
+  await wnPoll(true);
+  const rows = WN.list.map(w => `<div class="srow wn-row" data-hwnd="${w.hwnd}" style="cursor:pointer">
+      <div class="wn-ri">${w.icon ? `<img src="/api/appicon?k=${w.icon}" alt="">` : XI.windows}</div>
+      <div style="flex-grow:1;min-width:0"><div class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.title)}</div>
+      <div class="d">${esc(w.name)}</div></div></div>`).join('');
+  openSheet('Switch to', `<div style="margin-top:10px">${rows || '<div class="srow"><div class="d">Nothing open.</div></div>'}</div>`,
+    `<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
+  $('#sheetClose').onclick = closeSheet;
+}
+async function focusWindow(hwnd){
+  const w = WN.list.find(x => String(x.hwnd) === String(hwnd));
+  try {
+    await api('/api/window/focus', { hwnd: +hwnd });
+    if (navigator.vibrate) navigator.vibrate(8);
+    toast('Switched to ' + (w ? w.name : 'that window'));
+  } catch(err){ toast(err.message); wnPoll(true).then(() => refresh(true)); }
+}
+document.addEventListener('click', e => {
+  const w = e.target.closest('[data-hwnd]');
+  if (!w || editing) return;
+  e.stopPropagation();
+  focusWindow(w.dataset.hwnd);
+  if (w.classList.contains('wn-row')) closeSheet();
+}, true);
+
+/* ---- in-game card ---- */
+function gamestatsInner(t){
+  const g = S && S.game, st = (S && S.stats) || {};
+  const chip = (k, lab) => { const v = st[k]; return v && !v.na ? `<div class="gs-c"><b>${esc(String(v.big))}<small>${esc(String(v.unit).replace(/^\/.*/, '').split(' ')[0])}</small></b><span>${lab}</span></div>` : ''; };
+  const chips = chip('gpu', 'GPU') + chip('temp', 'GPU temp') + chip('cpu', 'CPU') + chip('ram', 'RAM');
+  const art = g && g.art ? `<div class="np-bg" style="--np:${npRGB(g)}"><img src="/api/np/art?v=${encodeURIComponent(g.art)}" alt=""></div>` : '';
+  if (!g) return `<div class="gs idle"><div class="gs-top"><div class="xt-ic">${XI.pad}</div><div><div class="xt-nm">No game running</div>
+    <div class="xt-sub">Live stats while you play</div></div></div>${t.h >= 2 ? `<div class="gs-chips">${chips}</div>` : ''}</div>`;
+  return `<div class="gs" style="--np:${npRGB(g)}">${art}<div class="gs-top">
+      ${g.art ? `<img class="gs-art" src="/api/np/art?v=${encodeURIComponent(g.art)}" alt="">` : `<div class="xt-ic">${XI.pad}</div>`}
+      <div style="min-width:0"><div class="xt-nm">${esc(g.title)}</div>
+      <div class="xt-sub"><i class="np-livedot"></i>${esc(g.appName)} · <span class="gs-t" data-from="${g.at - g.pos}">${mmss(g.pos)}</span></div></div></div>
+    ${t.h >= 2 ? `<div class="gs-chips">${chips}</div>` : ''}</div>`;
+}
+setInterval(() => {
+  document.querySelectorAll('.gs-t').forEach(e => { const v = mmss(Date.now() / 1000 - +e.dataset.from); if (e.textContent !== v) e.textContent = v; });
+}, 1000);
+
+/* ---- chat tile ---- */
+function chatInner(t){
+  const c = CH.info;
+  if (!c || !c.ready) return `<div class="xt xt-chat"><div class="xt-ic">${XI.spark}</div><div class="xt-main">
+    <div class="xt-nm">AI chat</div><div class="xt-sub">Set it up in the PC app → Settings → Chatbox</div></div></div>`;
+  if (t.w === 1) return `<div class="ico">${XI.spark.replace('<svg', '<svg width="20" height="20"')}<div class="lab">Chat</div></div>`;
+  return `<div class="ct"><div class="ct-h">${XI.spark}<span>${esc(t.label || 'Ask AI')}</span><small>${esc(c.model)}</small></div>
+    ${t.h >= 2 && CH.last ? `<div class="ct-last">${esc(CH.last)}</div>` : ''}
+    <div class="ct-in">Message…</div></div>`;
+}
+
+/* ---- screenshot ---- */
+function takeScreenshot(){
+  const a = document.createElement('a');
+  a.href = '/api/screenshot?t=' + Date.now();
+  a.download = '';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Screenshot saved');
+}
+
+/* ================= tile settings: hold a tile in edit mode =================
+ * Everything about one tile on one sheet - its name, size, colour and the
+ * things only that kind of tile has. Swipe down (or Done) saves. */
+let TS = null;
+let sheetOnClose = null;
+const ACCENTS = ['', '#7c3aed', '#2563eb', '#0ea5e9', '#10b981', '#84cc16', '#f59e0b', '#f97316', '#ef4444', '#ec4899', '#94a3b8'];
+const SIZE_OPTS = [[1,1],[2,1],[4,1],[2,2],[4,2],[2,3],[4,3],[4,4]];
+const KIND_NAMES = { slider:'Volume', toggle:'Switch', action:'Button', app:'App', game:'Game', stream:'Desktop preview',
+  stat:'Live stat', scene:'Scene', nowplaying:'Now playing', timer:'Sleep timer', appvol:'Volume mixer',
+  audioout:'Audio output', windows:'Open windows', gamestats:'In-game', chat:'AI chat', guest:'VM / container',
+  service:'Service', docker:'Container', link:'Link', spacer:'Spacer' };
+const SEEKS = [5, 10, 15, 30, 60];
+
+async function openTileSettings(id){
+  const f = findTile(id);
+  if (!f) return;
+  if (navigator.vibrate) navigator.vibrate(12);
+  TS = { id, d: JSON.parse(JSON.stringify(f.t)), devs: null };
+  TS.d.opts = TS.d.opts || {};
+  if (TS.d.kind === 'appvol') mxPoll();
+  if (TS.d.kind === 'audioout') TS.devs = (S && S.devices) || [];
+  drawTileSettings();
+  sheetOnClose = applyTileSettings;
+}
+
+function tsSection(title, inner){ return `<div class="ts-sec"><div class="ts-h">${title}</div>${inner}</div>`; }
+
+function drawTileSettings(){
+  const d = TS.d, o = d.opts;
+  let extra = '';
+  if (d.kind === 'timer'){
+    extra += tsSection('Time', `<div class="ts-chips">${[15, 30, 45, 60, 90, 120].map(m =>
+      `<button class="ts-chip ${o.minutes === m || (!o.minutes && m === 30) ? 'on' : ''}" data-tsmin="${m}">${m < 60 ? m + ' min' : (m / 60) + ' h'}</button>`).join('')}</div>`);
+    extra += tsSection('Then', `<div class="ts-chips">${TIMER_ACTS.map(([k, n]) =>
+      `<button class="ts-chip ${(o.action || 'pause') === k ? 'on' : ''}" data-tsact="${k}">${n}</button>`).join('')}</div>
+      ${['sleep', 'shutdown'].includes(o.action) ? '<div class="ts-note">Starting it asks for Face ID / your PIN, and you get a notification a minute before.</div>' : ''}`);
+  }
+  if (d.kind === 'appvol'){
+    const apps = MX.apps;
+    extra += tsSection('Shows', `<div class="ts-list">
+      <div class="ts-opt ${!d.ref ? 'on' : ''}" data-tsapp=""><div class="mx-ic">${XI.mixer}</div><span>Every app playing sound</span><i>${XI.check}</i></div>
+      ${apps.map(a => `<div class="ts-opt ${d.ref === a.app ? 'on' : ''}" data-tsapp="${esc(a.app)}"><div class="mx-ic">${mxIcon(a)}</div><span>${esc(a.name)}</span><i>${XI.check}</i></div>`).join('')}
+      ${d.ref && !apps.some(a => a.app === d.ref) ? `<div class="ts-opt on" data-tsapp="${esc(d.ref)}"><div class="mx-ic">${XI.mixer}</div><span>${esc(d.label || d.ref)}</span><i>${XI.check}</i></div>` : ''}
+      </div><div class="ts-note">Only apps making sound right now are listed - start the one you want, then come back.</div>`);
+  }
+  if (d.kind === 'audioout'){
+    const sel = o.devices || [];
+    extra += tsSection('Switch between', `<div class="ts-list">${(TS.devs || []).map(x =>
+      `<div class="ts-opt ${sel.includes(x.id) ? 'on' : ''}" data-tsdev="${esc(x.id)}"><div class="mx-ic">${devIcon(x.name)}</div><span>${esc(shortDev(x.name))}</span><i>${XI.check}</i></div>`).join('')}</div>
+      <div class="ts-note">Pick two or more - each tap moves to the next. None picked means all of them.</div>`);
+  }
+  if (d.kind === 'toggle' && d.ref === 'keeper'){
+    const v = o.target == null ? '' : o.target;
+    extra += tsSection('Hold the volume at', `<div class="ts-range"><input type="range" min="0" max="100" value="${v === '' ? (S ? S.volume : 30) : v}" id="tsTarget" style="--pct:${v === '' ? (S ? S.volume : 30) : v}%">
+      <b id="tsTargetV">${v === '' ? 'current' : v + '%'}</b></div>
+      <div class="ts-note">Leave it at "current" to hold whatever the volume is when you tap.</div>`);
+  }
+  if (d.kind === 'stat'){
+    const ks = [['cpu','CPU'],['gpu','GPU'],['temp','GPU temp'],['ram','RAM'],['disk','Disk'],['net','Network'],['battery','Battery']];
+    extra += tsSection('Shows', `<div class="ts-chips">${ks.map(([k, n]) => `<button class="ts-chip ${d.ref === k ? 'on' : ''}" data-tsstat="${k}">${n}</button>`).join('')}</div>`);
+  }
+  if (d.kind === 'action' && /^media\.(back|fwd)\d+$/.test(d.ref)){
+    const m = d.ref.match(/^media\.(back|fwd)(\d+)$/);
+    extra += tsSection('Jump', `<div class="ts-chips">${['back', 'fwd'].map(k => `<button class="ts-chip ${m[1] === k ? 'on' : ''}" data-tsdir="${k}">${k === 'back' ? 'Back' : 'Forward'}</button>`).join('')}</div>
+      <div class="ts-chips" style="margin-top:8px">${SEEKS.map(s => `<button class="ts-chip ${+m[2] === s ? 'on' : ''}" data-tssec="${s}">${s < 60 ? s + 's' : '1 min'}</button>`).join('')}</div>`);
+  }
+  const accent = ACCENTS.map(c => `<button class="ts-sw ${(d.accent || '') === c ? 'on' : ''}" data-tsacc="${c}"
+      style="${c ? '--c:' + c : ''}" aria-label="${c || 'Default colour'}">${c ? '' : '<span>A</span>'}</button>`).join('');
+  const sizes = SIZE_OPTS.map(([w, h]) => `<button class="ts-size ${d.w === w && d.h === h ? 'on' : ''}" data-tssize="${w},${h}">
+      <i style="--w:${w};--h:${h}"></i><span>${w}×${h}</span></button>`).join('');
+  openSheet(KIND_NAMES[d.kind] || 'Tile', `
+    <div class="ts-sec" style="margin-top:12px"><div class="ts-h">Name</div>
+      <input class="field" id="tsName" value="${esc(d.label || '')}" maxlength="60" placeholder="${esc(KIND_NAMES[d.kind] || '')}" style="width:100%"></div>
+    ${extra}
+    ${tsSection('Size', `<div class="ts-sizes">${sizes}</div>`)}
+    ${tsSection('Colour', `<div class="ts-sws">${accent}</div>`)}
+    <button class="ts-rm" id="tsRemove">${XI.trash}<span>Remove tile</span></button>`,
+    `<div style="flex-grow:1;font-size:11px;color:var(--muted)">Swipe down to save</div><button class="btn pri" id="tsDone">Done</button>`);
+  $('#tsDone').onclick = () => closeSheet();
+  $('#tsRemove').onclick = () => {
+    const f = findTile(TS.id);
+    TS = null; sheetOnClose = null;
+    if (f){ f.sec.tiles.splice(f.i, 1); dirty = true; }
+    closeSheet(); render(); saveLayoutNow();
+  };
+  const nm = $('#tsName');
+  nm.oninput = () => { TS.d.label = nm.value; };
+  const tr = $('#tsTarget');
+  if (tr) tr.oninput = () => { TS.d.opts.target = +tr.value; tr.style.setProperty('--pct', tr.value + '%'); $('#tsTargetV').textContent = tr.value + '%'; };
+}
+
+$('#sheetBody').addEventListener('click', e => {
+  if (!TS) return;
+  const d = TS.d, o = d.opts;
+  const q = (a) => e.target.closest('[' + a + ']');
+  let el;
+  if ((el = q('data-tsmin'))) o.minutes = +el.dataset.tsmin;
+  else if ((el = q('data-tsact'))) o.action = el.dataset.tsact;
+  else if ((el = q('data-tsapp'))){
+    d.ref = el.dataset.tsapp;
+    const a = MX.apps.find(x => x.app === d.ref);
+    if (!d.ref) d.label = 'Volume mixer'; else if (a) d.label = a.name;
+  }
+  else if ((el = q('data-tsdev'))){
+    const id = el.dataset.tsdev, s = new Set(o.devices || []);
+    s.has(id) ? s.delete(id) : s.add(id); o.devices = [...s];
+  }
+  else if ((el = q('data-tsstat'))){
+    const old = d.ref; d.ref = el.dataset.tsstat;
+    const names = { cpu:'CPU', gpu:'GPU', temp:'GPU temp', ram:'RAM', disk:'Disk', net:'Network', battery:'Battery' };
+    if (!d.label || d.label === names[old]) d.label = names[d.ref];
+  }
+  else if ((el = q('data-tsdir')) || (el = q('data-tssec'))){
+    const m = d.ref.match(/^media\.(back|fwd)(\d+)$/);
+    const dir = el.dataset.tsdir || m[1], sec = el.dataset.tssec || m[2];
+    d.ref = 'media.' + dir + sec;
+    d.label = (dir === 'back' ? 'Back ' : 'Forward ') + (+sec < 60 ? sec + 's' : '1 min');
+  }
+  else if ((el = q('data-tssize'))){ const [w, h] = el.dataset.tssize.split(',').map(Number); d.w = w; d.h = h; }
+  else if ((el = q('data-tsacc'))) d.accent = el.dataset.tsacc || undefined;
+  else return;
+  const sc = $('#sheetBody').scrollTop;
+  drawTileSettings();
+  $('#sheetBody').scrollTop = sc;
+});
+
+function applyTileSettings(){
+  if (!TS) return;
+  const f = findTile(TS.id), d = TS.d;
+  TS = null;
+  if (!f) return;
+  const nm = document.getElementById('tsName');
+  if (nm) d.label = nm.value.trim();
+  if (!d.label) d.label = KIND_NAMES[d.kind] || '';
+  if (!d.accent) delete d.accent;
+  if (!Object.keys(d.opts || {}).length) delete d.opts;
+  Object.keys(f.t).forEach(k => delete f.t[k]);
+  Object.assign(f.t, d);
+  dirty = true;
+  render();
+  saveLayoutNow();
+}
+function saveLayoutNow(){
+  api('/api/layout', L).then(l => { L = l; dirty = false; render(); toast('Saved'); }).catch(err => toast(err.message));
+}
+
+/* ================= notifications ================= */
+const NT = { info: null, sub: null, prefs: null };
+const TIER_NAMES = { off: 'Off', quiet: 'Quiet', normal: 'Normal', important: 'Important' };
+function ntSupported(){
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+}
+function ntIOSNeedsHome(){
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) && !(navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+}
+async function ntReg(){
+  return navigator.serviceWorker.getRegistration('/') || navigator.serviceWorker.register('/sw.js', { scope: '/' });
+}
+async function openNotifications(){
+  let reg = null;
+  try {
+    if (ntSupported()){ reg = await ntReg(); NT.sub = reg && await reg.pushManager.getSubscription(); }
+  } catch(e){ NT.sub = null; }
+  try {
+    NT.info = await api('/api/push' + (NT.sub ? '?ep=' + encodeURIComponent(NT.sub.endpoint) : ''));
+  } catch(err){ toast(err.message); return; }
+  NT.prefs = NT.info.prefs || (NT.sub ? null : null);
+  let hist = [];
+  try { hist = (await api('/api/notifications')).items; } catch(e){}
+  drawNotifications(hist);
+}
+function ntDefault(){
+  return { enabled: true, types: Object.fromEntries(NT.info.types.map(t => [t.id, t.default])) };
+}
+function drawNotifications(hist){
+  const on = !!(NT.sub && NT.prefs && NT.prefs.enabled);
+  let top;
+  if (!ntSupported()){
+    top = `<div class="nt-warn">${ntIOSNeedsHome()
+      ? 'On iPhone, notifications only work from the Home Screen app. Settings → <b>Add to Home Screen</b>, open it from there, then come back here.'
+      : !window.isSecureContext ? 'Notifications need the secure (https) address of this PC.'
+      : "This browser can't show notifications."}</div>`;
+  } else if (Notification.permission === 'denied'){
+    top = `<div class="nt-warn">Notifications are blocked for this app in your phone's settings. Allow them there, then come back.</div>`;
+  } else top = '';
+  const p = NT.prefs || ntDefault();
+  const rows = NT.info.types.map(t => {
+    const cur = p.types[t.id] || t.default;
+    return `<div class="nt-type ${cur === 'off' ? 'off' : ''}"><div class="nt-tt"><b>${esc(t.name)}</b><span>${esc(t.desc)}</span></div>
+      <div class="nt-seg" role="radiogroup" aria-label="${esc(t.name)}">${NT.info.tiers.map(k =>
+        `<button class="t-${k} ${cur === k ? 'on' : ''}" data-nttier="${t.id}:${k}" role="radio" aria-checked="${cur === k}">${TIER_NAMES[k]}</button>`).join('')}</div></div>`;
+  }).join('');
+  const ago = ts => { const s = Date.now() / 1000 - ts; return s < 60 ? 'now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
+  const recent = hist.length ? hist.slice(0, 8).map(h => `<div class="nt-card"><div class="nt-ci">${XI.bell}</div>
+      <div class="nt-cm"><div><b>${esc(h.title)}</b><time>${ago(h.ts)}</time></div><span>${esc(h.body)}</span></div></div>`).join('')
+    : '<div class="ts-note" style="margin:0">Nothing yet.</div>';
+  openSheet('Notifications', `${top}
+    <div class="srow" style="margin-top:8px"><div style="flex-grow:1"><div class="t">Allow notifications</div>
+      <div class="d">${on ? 'On for this phone' : 'Off for this phone'}</div></div>
+      <div class="sw ${on ? 'on' : ''}" id="ntMaster" ${ntSupported() && Notification.permission !== 'denied' ? '' : 'style="opacity:.4;pointer-events:none"'}><i></i></div></div>
+    <div class="${on ? '' : 'nt-dim'}">
+      <div class="ts-h" style="margin:18px 2px 6px">What you get</div>
+      <div class="nt-legend"><span><i class="t-quiet"></i>Quiet - no sound</span><span><i class="t-normal"></i>Normal</span><span><i class="t-important"></i>Important - stays until you clear it</span></div>
+      ${rows}
+      <button class="btn wide" id="ntTest" style="margin-top:14px">Send a test notification</button>
+    </div>
+    <div class="ts-h" style="margin:20px 2px 8px">Recent</div>${recent}
+    <div style="height:10px"></div>`,
+    `<div style="flex-grow:1;font-size:11px;color:var(--muted)">Each phone has its own settings</div><button class="btn" id="sheetClose">Done</button>`);
+  $('#sheetClose').onclick = closeSheet;
+  const m = $('#ntMaster');
+  if (m) m.onclick = () => ntToggle(!on).catch(err => toast(err.message));
+  const t = $('#ntTest');
+  if (t) t.onclick = async () => {
+    if (!on) return;
+    try { await api('/api/push/test', { endpoint: NT.sub.endpoint, tier: 'normal' }); toast('Sent - check your notifications'); }
+    catch(err){ toast(err.message); }
+  };
+  NT.hist = hist;
+}
+async function ntToggle(want){
+  if (want){
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted'){ toast('Notifications were not allowed'); return openNotifications(); }
+    const reg = await ntReg();
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true,
+      applicationServerKey: unb64u(NT.info.publicKey) });
+    const prefs = Object.assign(NT.prefs || ntDefault(), { enabled: true });
+    const dev = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) ? 'iPad' : /Android/.test(navigator.userAgent) ? 'Android' : 'Browser';
+    const r = await api('/api/push/subscribe', { sub: sub.toJSON(), prefs, device: dev });
+    NT.sub = sub; NT.prefs = r.prefs;
+    toast('Notifications on');
+  } else {
+    NT.prefs = Object.assign(NT.prefs || ntDefault(), { enabled: false });
+    await api('/api/push/prefs', { endpoint: NT.sub.endpoint, prefs: NT.prefs });
+    toast('Notifications off');
+  }
+  drawNotifications(NT.hist || []);
+}
+$('#sheetBody').addEventListener('click', async e => {
+  const b = e.target.closest('[data-nttier]');
+  if (!b || !NT.sub || !NT.prefs || !NT.prefs.enabled) return;
+  const [type, tier] = b.dataset.nttier.split(':');
+  NT.prefs.types[type] = tier;
+  const sc = $('#sheetBody').scrollTop;
+  drawNotifications(NT.hist || []);
+  $('#sheetBody').scrollTop = sc;
+  try { NT.prefs = (await api('/api/push/prefs', { endpoint: NT.sub.endpoint, prefs: NT.prefs })).prefs; }
+  catch(err){ toast(err.message); }
+});
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => {
+  if (e.data && e.data.aetherNotification && /#files/.test(e.data.aetherNotification) && typeof showTab === 'function') showTab('files');
+});
+
+/* ================= the AI chat tab ================= */
+const CH = { info: null, conv: null, msgs: [], busy: false, ctrl: null, last: '' };
+function chEl(){ return document.getElementById('chat'); }
+
+/* Markdown, the safe way: escape everything first, then add back a few
+   formats. Links only ever http(s), and they open outside the app. */
+function md(src){
+  const blocks = [];
+  let s = esc(src).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(code); return '\u0000' + (blocks.length - 1) + '\u0000'; });
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, '$1<i>$2</i>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,!?:;])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  const out = [];
+  let list = null;
+  for (const line of s.split('\n')){
+    const ul = line.match(/^\s*[-*•]\s+(.*)/), ol = line.match(/^\s*\d+[.)]\s+(.*)/), h = line.match(/^#{1,4}\s+(.*)/);
+    if (ul || ol){
+      const tag = ul ? 'ul' : 'ol';
+      if (!list || list.tag !== tag){ if (list) out.push(`</${list.tag}>`); list = { tag }; out.push(`<${tag}>`); }
+      out.push(`<li>${(ul || ol)[1]}</li>`); continue;
+    }
+    if (list){ out.push(`</${list.tag}>`); list = null; }
+    if (h) out.push(`<h4>${h[1]}</h4>`);
+    else if (!line.trim()) out.push('<br>');
+    else out.push(`<p>${line}</p>`);
+  }
+  if (list) out.push(`</${list.tag}>`);
+  return out.join('').replace(/(<br>)+/g, '').replace(/\u0000(\d+)\u0000/g, (_, i) => `<pre>${blocks[+i]}</pre>`);
+}
+
+function chBuild(){
+  const el = document.createElement('div');
+  el.id = 'chat';
+  el.innerHTML = `<div class="ch-head"><button class="fv-ib" data-ch="hist" aria-label="Conversations">${XI.list}</button>
+      <div class="ch-title"><b>Chat</b><span class="ch-model"></span></div>
+      <button class="fv-ib" data-ch="new" aria-label="New chat">${XI.plus}</button></div>
+    <div class="ch-scroll"><div class="ch-msgs"></div></div>
+    <form class="ch-comp" autocomplete="off"><textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+      <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></form>`;
+  document.body.appendChild(el);
+  const ta = el.querySelector('textarea'), form = el.querySelector('form');
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; chBtn(); };
+  ta.addEventListener('input', grow);
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)){ e.preventDefault(); form.requestSubmit(); } });
+  ta.addEventListener('focus', () => document.body.classList.add('kbd'));
+  ta.addEventListener('blur', () => setTimeout(() => document.body.classList.remove('kbd'), 120));
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    if (CH.busy){ if (CH.ctrl) CH.ctrl.abort(); return; }
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = ''; grow();
+    chSend(text);
+  });
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-ch]');
+    if (b && b.dataset.ch === 'new'){ if (CH.ctrl) CH.ctrl.abort(); CH.conv = null; CH.msgs = []; chDraw(); ta.focus(); }
+    if (b && b.dataset.ch === 'hist') chHistory();
+    const sug = e.target.closest('[data-chsug]');
+    if (sug){ chSend(sug.dataset.chsug); }
+  });
+  if (window.visualViewport){
+    const fit = () => {
+      if (!el.classList.contains('show')) return;
+      el.style.height = visualViewport.height + 'px';
+      el.style.top = visualViewport.offsetTop + 'px';
+    };
+    visualViewport.addEventListener('resize', fit);
+    visualViewport.addEventListener('scroll', fit);
+  }
+  return el;
+}
+function chBtn(){
+  const el = chEl(); if (!el) return;
+  const b = el.querySelector('.ch-send'), ta = el.querySelector('textarea');
+  b.innerHTML = CH.busy ? XI.stop : XI.send;
+  b.classList.toggle('busy', CH.busy);
+  b.disabled = !CH.busy && !ta.value.trim();
+}
+function chMsgHTML(m, i){
+  if (m.role === 'user') return `<div class="ch-m me"><div class="ch-b">${esc(m.text).replace(/\n/g, '<br>')}</div></div>`;
+  const tools = (m.tools || []).map(t => `<div class="ch-tool ${t.ok === undefined ? 'run' : t.ok ? 'ok' : 'bad'}">
+      <i>${t.ok === undefined ? '<span class="spin"></span>' : t.ok ? XI.check : '!'}</i>${esc(t.label)}</div>`).join('');
+  return `<div class="ch-m ai" data-i="${i}">${tools ? `<div class="ch-tools">${tools}</div>` : ''}
+    ${m.text ? `<div class="ch-b md">${md(m.text)}</div>` : m.error ? '' : (m.live ? '<div class="ch-b"><span class="ch-dots"><i></i><i></i><i></i></span></div>' : '')}
+    ${m.error ? `<div class="ch-err">${esc(m.error)}</div>` : ''}</div>`;
+}
+function chDraw(){
+  const el = chEl(); if (!el) return;
+  const c = CH.info || {};
+  el.querySelector('.ch-model').textContent = c.model || '';
+  const box = el.querySelector('.ch-msgs');
+  if (!CH.msgs.length){
+    const on = (c.tools || []).filter(t => t.on).map(t => t.name.toLowerCase());
+    const sugg = [];
+    if (on.includes('pc status')) sugg.push("How's my PC doing?");
+    if (on.includes('web search')) sugg.push("What's new in tech today?");
+    if (on.includes('media')) sugg.push('Skip this song');
+    if (on.includes('open apps')) sugg.push('Open Spotify');
+    box.innerHTML = `<div class="ch-empty">${XI.spark}<b>What can I help with?</b>
+      <span>${on.length ? 'It can use: ' + esc(on.join(', ')) + '.' : 'Just chat - no tools are switched on.'}</span>
+      <div class="ch-sugs">${sugg.map(s => `<button data-chsug="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
+  } else box.innerHTML = CH.msgs.map(chMsgHTML).join('');
+  chBtn();
+  const sc = el.querySelector('.ch-scroll');
+  sc.scrollTop = sc.scrollHeight;
+}
+function chPatchLast(){
+  const el = chEl(); if (!el) return;
+  const i = CH.msgs.length - 1, node = el.querySelector(`.ch-m.ai[data-i="${i}"]`);
+  const html = chMsgHTML(CH.msgs[i], i);
+  if (node) node.outerHTML = html; else chDraw();
+  const sc = el.querySelector('.ch-scroll');
+  if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
+}
+async function chSend(text){
+  if (CH.busy) return;
+  CH.msgs.push({ role: 'user', text });
+  const ai = { role: 'assistant', text: '', tools: [], live: true };
+  CH.msgs.push(ai);
+  CH.busy = true; CH.ctrl = new AbortController();
+  chDraw();
+  let frame = 0;
+  const paint = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; chPatchLast(); }); };
+  try {
+    const r = await fetch('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conv: CH.conv, text }), signal: CH.ctrl.signal });
+    if (r.status === 401){ location.href = '/login'; return; }
+    if (r.status === 403){ const j = await r.json().catch(() => ({})); if (j.error === 'locked'){ await sfUnlock(); CH.msgs.splice(-2); CH.busy = false; return chSend(text); } }
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;){
+      const { value, done } = await rd.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let k;
+      while ((k = buf.indexOf('\n\n')) >= 0){
+        const chunk = buf.slice(0, k); buf = buf.slice(k + 2);
+        if (!chunk.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(chunk.slice(5)); } catch(e){ continue; }
+        if (ev.t === 'start') CH.conv = ev.conv;
+        else if (ev.t === 'text') ai.text += ev.d;
+        else if (ev.t === 'tool') ai.tools.push({ label: ev.label });
+        else if (ev.t === 'tool_done'){ const t = ai.tools[ai.tools.length - 1]; if (t) t.ok = ev.ok; }
+        else if (ev.t === 'error') ai.error = ev.d;
+        paint();
+      }
+    }
+  } catch(err){
+    if (err.name !== 'AbortError') ai.error = err.message;
+    else if (!ai.text) ai.error = 'Stopped';
+  }
+  ai.live = false;
+  ai.tools.forEach(t => { if (t.ok === undefined) t.ok = false; });
+  CH.busy = false; CH.ctrl = null;
+  CH.last = ai.text ? ai.text.slice(0, 140) : CH.last;
+  chPatchLast(); chBtn();
+}
+async function chHistory(){
+  let j;
+  try { j = await api('/api/chat'); } catch(err){ toast(err.message); return; }
+  const day = ts => new Date(ts * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  openSheet('Conversations', `<div style="margin-top:8px">${(j.convs || []).map(c => `
+      <div class="srow" style="cursor:pointer" data-chopen="${esc(c.id)}"><div style="flex-grow:1;min-width:0">
+        <div class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.title || 'Chat')}</div>
+        <div class="d">${day(c.updated)} · ${Math.ceil(c.n / 2)} message${c.n > 2 ? 's' : ''}</div></div>
+        <button class="btn sm" data-chdel="${esc(c.id)}" aria-label="Delete">${XI.trash}</button></div>`).join('')
+      || '<div class="srow"><div class="d">No conversations yet.</div></div>'}</div>`,
+    `${(j.convs || []).length ? '<button class="btn" id="chClear">Delete all</button>' : ''}<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
+  $('#sheetClose').onclick = closeSheet;
+  const cl = $('#chClear');
+  if (cl) cl.onclick = async () => { if (cl.dataset.sure){ await api('/api/chat/clear', {}); CH.conv = null; CH.msgs = []; chDraw(); closeSheet(); } else { cl.dataset.sure = 1; cl.textContent = 'Sure? Tap again'; cl.classList.add('danger'); } };
+  $('#sheetBody').querySelectorAll('[data-chdel]').forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    await api('/api/chat/delete', { id: b.dataset.chdel });
+    if (CH.conv === b.dataset.chdel){ CH.conv = null; CH.msgs = []; chDraw(); }
+    chHistory();
+  });
+  $('#sheetBody').querySelectorAll('[data-chopen]').forEach(r => r.onclick = async () => {
+    try {
+      const c = await api('/api/chat/conv?id=' + encodeURIComponent(r.dataset.chopen));
+      CH.conv = c.id; CH.msgs = c.messages.map(m => ({ role: m.role, text: m.text, tools: (m.tools || []) }));
+      closeSheet(); chDraw();
+    } catch(err){ toast(err.message); }
+  });
+}
+async function chLoad(){
+  if (!isPC()) return;
+  try { CH.info = await api('/api/chat'); } catch(e){ return; }
+  const tabs = document.getElementById('tabs');
+  if (tabs && CH.info.ready && !tabs.querySelector('[data-tab=chat]')){
+    tabs.insertAdjacentHTML('beforeend', `<button data-tab="chat">${XI.spark}<span>Chat</span></button>`);
+  }
+  if (tabs && !CH.info.ready){ const b = tabs.querySelector('[data-tab=chat]'); if (b) b.remove(); }
+}
+
 /* ================= boot ================= */
 async function loadLayout(){
   L = await api('/api/layout');
@@ -3843,6 +4612,8 @@ async function poll(){
   try {
     if (draggingSlider || Date.now() < suppressUntil) return;
     S = await api('/api/state');
+    if (S.timer && S.timer.on) S._skew = Date.now() / 1000 - (S.timer.at - S.timer.left);
+    mxPoll(); wnPoll();
     $('#dot').className = 'dot';
     // The alias (if you set one) wins over the machine's hostname here too.
     $('#meta').textContent = S.time + ' · ' + pcsCurrentName(S.device);
@@ -3856,10 +4627,12 @@ async function poll(){
   await sfOnLaunch();          // Face ID / PIN first, when it's set up
   await loadPlatform();
   setupTabs();
+  chLoad().then(() => { if (L) refresh(); });
   try {
     await loadLayout();
     S = await api('/api/state');
     render();
+    Promise.all([mxPoll(), wnPoll(true)]).then(() => refresh());
   } catch(e){
     board.innerHTML = `<div style="padding:40px 10px;text-align:center;color:var(--muted)">
       ${esc(e.message)}</div>`;

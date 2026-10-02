@@ -17,7 +17,7 @@ HERE = os.path.abspath(SPECPATH)
 # the bundle rather than imported modules.
 WEB = [
     "ui.html", "login.html", "pc.html", "setup.html",
-    "app.js", "pc.js", "setup.js",
+    "app.js", "pc.js", "setup.js", "sw.js",
     "config.default.json", "aether.ico",
 ]
 
@@ -36,6 +36,10 @@ hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
     "update", "wol", "tls", "secondfactor", "webauthn", "media", "files", "games", "jellyfin",
+    "mixer", "timer", "push", "watch", "chat",
+    # Web Push (notifications): encryption + VAPID signing
+    "cryptography.hazmat.primitives.ciphers.aead",
+    "cryptography.hazmat.primitives.asymmetric.utils",
     # Now Playing reads Windows' media controls through these (WinRT).
     "winrt.runtime", "winrt.system", "winrt.windows.foundation",
     "winrt.windows.foundation.collections", "winrt.windows.media.control",

@@ -35,6 +35,17 @@ ACTIONS = {
     "media.fwd10":     {"label": "Forward 10s", "kind": "seek", "delta": 10},
     "media.back30":    {"label": "Back 30s", "kind": "seek", "delta": -30},
     "media.fwd30":     {"label": "Forward 30s", "kind": "seek", "delta": 30},
+    "media.back5":     {"label": "Back 5s", "kind": "seek", "delta": -5},
+    "media.fwd5":      {"label": "Forward 5s", "kind": "seek", "delta": 5},
+    "media.back15":    {"label": "Back 15s", "kind": "seek", "delta": -15},
+    "media.fwd15":     {"label": "Forward 15s", "kind": "seek", "delta": 15},
+    "media.back60":    {"label": "Back 1 min", "kind": "seek", "delta": -60},
+    "media.fwd60":     {"label": "Forward 1 min", "kind": "seek", "delta": 60},
+    # Discord's own keybinds (set once in Discord - see the PC app).
+    "discord.mute":    {"label": "Discord mute", "kind": "hotkey"},
+    "discord.deafen":  {"label": "Discord deafen", "kind": "hotkey"},
+    # A full-size screenshot, straight to the phone.
+    "screen.shot":     {"label": "Screenshot", "kind": "phone"},
     "screen.off":      {"label": "Screen off", "kind": "screenoff"},
     "power.lock":      {"label": "Lock PC", "kind": "power"},
     "power.sleep":     {"label": "Sleep", "kind": "power"},
@@ -46,6 +57,7 @@ ACTIONS = {
 TOGGLES = {
     "mute":   {"label": "Mute"},
     "keeper": {"label": "Lock volume"},
+    "micmute": {"label": "Mic"},
 }
 
 # primary  = the "on" colour: filled tiles, slider, active chip
@@ -271,7 +283,33 @@ def save(d):
 # malicious payload cannot smuggle anything into the file we execute from.
 
 VALID_KINDS = {"slider", "toggle", "action", "app", "game",
-               "stream", "stat", "scene", "spacer", "nowplaying"}
+               "stream", "stat", "scene", "spacer", "nowplaying",
+               # 1.5: sleep timer, one app's volume, output switcher, open
+               # windows, the in-game card, the AI chat
+               "timer", "appvol", "audioout", "windows", "gamestats", "chat"}
+TIMER_ACTIONS = ("pause", "mute", "screenoff", "lock", "sleep", "shutdown")
+
+
+def clean_opts(kind, o):
+    """A tile's own settings (from its settings sheet), allowlisted per kind."""
+    o = o if isinstance(o, dict) else {}
+    out = {}
+    if kind == "timer":
+        try:
+            out["minutes"] = max(1, min(1440, int(o.get("minutes", 30))))
+        except Exception:
+            out["minutes"] = 30
+        out["action"] = o.get("action") if o.get("action") in TIMER_ACTIONS else "pause"
+    if kind == "audioout":
+        devs = o.get("devices") if isinstance(o.get("devices"), list) else []
+        out["devices"] = [str(d)[:300] for d in devs if isinstance(d, str)][:8]
+    if kind == "toggle":
+        try:
+            if o.get("target") is not None:
+                out["target"] = max(0, min(100, int(o["target"])))
+        except Exception:
+            pass
+    return out
 
 
 def sanitize(incoming, known_launches):
@@ -323,6 +361,13 @@ def sanitize(incoming, known_launches):
                 "kind": kind, "w": w, "h": h, "ref": ref,
                 "label": str(t.get("label", ""))[:60],
             }
+            # Per-tile look: a tint colour (literal hex only - it lands in CSS).
+            acc = str(t.get("accent") or "")
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", acc):
+                clean["accent"] = acc.lower()
+            opts = clean_opts(kind, t.get("opts"))
+            if opts:
+                clean["opts"] = opts
 
             # A launch command is only ever taken from OUR scan, never from
             # whatever the phone sent - that is the whole allowlist idea.
@@ -339,6 +384,10 @@ def sanitize(incoming, known_launches):
             if kind == "action" and ref not in ACTIONS:
                 continue
             if kind == "toggle" and ref not in TOGGLES:
+                continue
+            if kind == "stat" and not re.fullmatch(r"[a-z]{2,12}", ref):
+                continue
+            if kind == "appvol" and ref and not re.fullmatch(r"[\w .()+-]{1,80}\.exe", ref, re.I):
                 continue
             tiles.append(clean)
 

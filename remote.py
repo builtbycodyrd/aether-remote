@@ -49,6 +49,11 @@ import version        # noqa: E402
 import media          # noqa: E402
 import files          # noqa: E402
 import jellyfin       # noqa: E402
+import mixer          # noqa: E402
+import timer          # noqa: E402
+import push           # noqa: E402
+import watch          # noqa: E402
+import chat           # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -501,6 +506,13 @@ class Handler(BaseHTTPRequestHandler):
 
         # Icons and the manifest are needed by the login page and by
         # "Add to Home Screen", both of which happen before any session.
+        if path == "/sw.js":
+            # The service worker that shows notifications. Plain static code;
+            # scoped to the whole app so it can open the right page on a tap.
+            with open(paths.asset("sw.js"), "rb") as f:
+                return self._send(200, f.read(), "application/javascript; charset=utf-8",
+                                  {"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
         if path == "/manifest.webmanifest":
             return self._send(200, MANIFEST, "application/manifest+json",
                               {"Cache-Control": "public, max-age=3600"})
@@ -645,6 +657,68 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/jellyfin":
                 return self._send(200, jellyfin.status())
 
+            if path == "/api/mixer":
+                out = []
+                for a in mixer.apps():
+                    out.append({"app": a["app"], "name": a["name"], "volume": a["volume"],
+                                "muted": a["muted"], "icon": _icon_key(a["path"])})
+                return self._send(200, {"apps": out})
+
+            if path == "/api/appicon":
+                ip = _icon_path(qs.get("k", [""])[0])
+                if not ip:
+                    return self._send(404, {"error": "no icon"})
+                with open(ip, "rb") as f:
+                    data = f.read()
+                return self._send(200, data, "image/png", {"Cache-Control": "private, max-age=86400"})
+
+            if path == "/api/windows":
+                wins = []
+                for w in sysctl.running_windows():
+                    exe = sysctl.window_exe(w["hwnd"]) if w.get("hwnd") else ""
+                    wins.append(dict(w, icon=_icon_key(exe), name=_app_name(exe, w["process"])))
+                fg = sysctl.foreground_app()
+                return self._send(200, {"windows": wins, "foreground": fg.get("pid")})
+
+            if path == "/api/audio/devices":
+                return self._send(200, sysctl.devices())
+
+            if path == "/api/timer":
+                return self._send(200, timer.info())
+
+            if path == "/api/push":
+                ep = qs.get("ep", [""])[0]
+                return self._send(200, {"publicKey": push.public_key(),
+                                        "types": [{"id": t[0], "name": t[1], "desc": t[2], "default": t[3]}
+                                                  for t in push.TYPES],
+                                        "tiers": list(push.TIERS),
+                                        "prefs": push.prefs_for(ep) if ep else None})
+
+            if path == "/api/notifications":
+                return self._send(200, {"items": push.history()})
+
+            if path == "/api/chat":
+                return self._send(200, dict(chat.public(), convs=chat.conversations()))
+
+            if path == "/api/chat/conv":
+                c = chat.conversation(qs.get("id", [""])[0])
+                if not c:
+                    return self._send(404, {"error": "no such conversation"})
+                return self._send(200, c)
+
+            if path == "/api/chat/config":
+                # The key and the setup live on the PC: only the PC app sees them.
+                if not self._is_local():
+                    return self._send(403, {"error": "set the chat up from the PC app"})
+                return self._send(200, chat.public(local=True))
+
+            if path == "/api/screenshot":
+                return self._screenshot()
+
+            if path == "/api/gamestats":
+                return self._send(200, {"game": media.current_game(),
+                                        "stats": sysctl.system_stats()})
+
             if path == "/api/np/art":
                 # Artwork of what's playing - re-encoded by us, served by hash.
                 got = media.art(qs.get("v", [""])[0])
@@ -771,9 +845,18 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = auth.verify_code(b.get("code", ""), self._client_ip())
             if ok:
                 log("login ok from %s" % self._client_ip())
+                _LOGIN_FAILS.pop(self._client_ip(), None)
+                push.notify_async("security", "New sign-in",
+                                  "A phone signed in to %s from %s." % (auth.ACCOUNT, self._client_ip()),
+                                  tag="signin")
                 return self._send(200, {"ok": True},
                                   extra={"Set-Cookie": self._session_cookie()})
             log("login failed from %s: %s" % (self._client_ip(), msg))
+            n = _LOGIN_FAILS[self._client_ip()] = _LOGIN_FAILS.get(self._client_ip(), 0) + 1
+            if n == 3:
+                push.notify_async("security", "Wrong codes",
+                                  "Someone at %s has typed 3 wrong sign-in codes." % self._client_ip(),
+                                  tag="badcodes")
             return self._send(401, {"error": msg})
 
         if not self._authed():
@@ -872,6 +955,101 @@ class Handler(BaseHTTPRequestHandler):
                 okset = sysctl.set_clipboard_text(text)
                 return self._send(200 if okset else 500,
                                   {"ok": okset, "chars": len(text)})
+
+            if path == "/api/mixer":
+                app = str(b.get("app", ""))[:120]
+                vol = b.get("volume")
+                try:
+                    vol = None if vol is None else max(0, min(100, int(vol)))
+                except (TypeError, ValueError):
+                    return self._send(400, {"error": "bad volume"})
+                mute = b.get("mute")
+                r = mixer.set_app(app, vol, None if mute is None else bool(mute))
+                if not r["sessions"]:
+                    return self._send(404, {"error": "That app isn't playing sound right now"})
+                return self._send(200, r)
+
+            if path == "/api/window/focus":
+                try:
+                    r = sysctl.focus_window(int(b.get("hwnd", 0)))
+                except (TypeError, ValueError):
+                    return self._send(400, {"error": "bad window"})
+                return self._send(200 if r["ok"] else 409, r)
+
+            if path == "/api/audio/default":
+                did = str(b.get("id", ""))
+                if did not in {d["id"] for d in sysctl.devices()["devices"]}:
+                    return self._send(400, {"error": "no such output"})
+                sysctl.set_default_device(did)
+                log("audio output switched")
+                return self._send(200, sysctl.devices())
+
+            if path == "/api/timer":
+                action = str(b.get("action", "pause"))
+                # Putting the PC to sleep or off later is as serious as now.
+                if action in timer.POWER and self._stepup("timer." + action, b):
+                    return
+                try:
+                    r = timer.start(b.get("minutes", 30), action)
+                except (TypeError, ValueError) as e:
+                    return self._send(400, {"error": str(e)})
+                log("sleep timer: %s in %s min" % (action, b.get("minutes")))
+                return self._send(200, r)
+
+            if path == "/api/timer/cancel":
+                log("sleep timer cancelled")
+                return self._send(200, timer.cancel())
+
+            if path == "/api/push/subscribe":
+                try:
+                    prefs = push.subscribe(b.get("sub"), b.get("prefs"), b.get("device", ""))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+                log("notifications: a phone subscribed")
+                return self._send(200, {"ok": True, "prefs": prefs})
+
+            if path == "/api/push/prefs":
+                try:
+                    return self._send(200, {"ok": True, "prefs": push.set_prefs(
+                        str(b.get("endpoint", "")), b.get("prefs"))})
+                except KeyError as e:
+                    return self._send(404, {"error": str(e)})
+
+            if path == "/api/push/unsubscribe":
+                push.unsubscribe(str(b.get("endpoint", "")))
+                return self._send(200, {"ok": True})
+
+            if path == "/api/push/test":
+                tier = b.get("tier") if b.get("tier") in push.TIERS[1:] else "normal"
+                n = push.notify("test", "Aether Remote", "Notifications are working.",
+                                force_tier=tier, only=str(b.get("endpoint", "")) or None)
+                return self._send(200 if n else 502, {"sent": n} if n else
+                                  {"error": "Your phone's push service didn't accept it - try turning notifications off and on."})
+
+            if path == "/api/chat/send":
+                return self._chat_send(b)
+
+            if path == "/api/chat/delete":
+                chat.delete(str(b.get("id", "")))
+                return self._send(200, {"ok": True, "convs": chat.conversations()})
+
+            if path == "/api/chat/clear":
+                chat.clear()
+                return self._send(200, {"ok": True, "convs": []})
+
+            if path in ("/api/chat/config", "/api/chat/models", "/api/chat/test"):
+                if not self._is_local():
+                    return self._send(403, {"error": "set the chat up from the PC app"})
+                try:
+                    if path == "/api/chat/config":
+                        r = chat.update(b)
+                        log("chat settings saved (%s)" % r["provider"])
+                        return self._send(200, r)
+                    if path == "/api/chat/models":
+                        return self._send(200, {"models": chat.list_models(b)})
+                    return self._send(200, chat.test())
+                except (ValueError, RuntimeError) as e:
+                    return self._send(400, {"error": str(e)})
 
             if path == "/api/jellyfin/connect":
                 # Quick Connect: the PC gets its own Jellyfin sign-in once
@@ -1192,6 +1370,9 @@ class Handler(BaseHTTPRequestHandler):
                                              purpose, scope if purpose == "stepup" else "")
             if not good:
                 log("second factor failed from %s: %s" % (self._client_ip(), msg))
+                if SF.st.get("fails", 0) in (3, 5):
+                    push.notify_async("security", "Wrong PIN",
+                                      "Someone keeps getting the PIN wrong on %s." % auth.ACCOUNT, tag="badpin")
                 # 400, not 401: the app reads 401 as "signed out" and would
                 # bounce to the login page over a mistyped PIN.
                 return self._send(400, {"error": msg, "sf_failed": True,
@@ -1326,6 +1507,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "nowplaying": media.now_playing()})
             elif spec["kind"] == "screenoff":
                 sysctl.screen_off()
+            elif spec["kind"] == "hotkey":
+                # Discord's own keybinds - Ctrl+Shift+M / Ctrl+Shift+D, set
+                # once in Discord (Settings > Keybinds); the PC app says how.
+                stream.press({"discord.mute": "m", "discord.deafen": "d"}[ref], ["ctrl", "shift"])
+            elif spec["kind"] == "phone":
+                pass                    # the phone does these itself (screenshot)
             elif spec["kind"] == "power":
                 return self._power({"action": ref.split(".", 1)[1],
                                     "confirm": b.get("confirm"),
@@ -1338,6 +1525,14 @@ class Handler(BaseHTTPRequestHandler):
                 if want is None:
                     want = not sysctl.status()["muted"]
                 sysctl.set_mute(bool(want))
+            elif ref == "micmute":
+                want = b.get("value")
+                if want is None:
+                    want = not mixer.mic()["muted"]
+                r = mixer.set_mic(bool(want))
+                if not r["mics"]:
+                    return self._send(409, {"error": "No microphone found"})
+                log("microphone %s" % ("muted" if want else "on"))
             elif ref == "keeper":
                 want = b.get("value")
                 if want is None:
@@ -1919,6 +2114,12 @@ class Handler(BaseHTTPRequestHandler):
         st["memory"] = sysctl.memory_info()
         st["stats"] = sysctl.system_stats()
         st["nowplaying"] = media.now_playing()
+        st["timer"] = timer.info()
+        st["game"] = media.current_game()
+        try:
+            st["mic"] = _mic_cached()
+        except Exception:
+            st["mic"] = None
         st["foreground"] = sysctl.foreground_app()
         st["devices"] = sysctl.devices()["devices"]
         st["launchers"] = [{"id": l["id"], "label": l["label"],
@@ -1927,6 +2128,121 @@ class Handler(BaseHTTPRequestHandler):
         st["monitors"] = stream.monitors()
         st["time"] = time.strftime("%H:%M")
         return st
+
+    def _screenshot(self):
+        """The whole screen at full size, as a PNG to save on the phone."""
+        try:
+            from PIL import ImageGrab
+        except ImportError:
+            return self._send(501, {"error": "Pillow not installed on the PC"})
+        mon = 0
+        try:
+            img = ImageGrab.grab(all_screens=False)
+        except Exception as e:
+            return self._send(500, {"error": "Couldn't capture the screen: %s" % e})
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=False)
+        name = time.strftime("Screenshot %Y-%m-%d %H.%M.%S.png")
+        log("screenshot taken (monitor %d)" % mon)
+        return self._send(200, buf.getvalue(), "image/png",
+                          {"Content-Disposition": 'attachment; filename="%s"' % name})
+
+    def _chat_send(self, b):
+        """Stream the AI's answer as server-sent events. The tools it may use
+        are the app's own code paths - see _chat_hooks."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        gone = {"v": False}
+
+        def emit(ev):
+            if gone["v"]:
+                raise ConnectionAbortedError("the phone stopped listening")
+            try:
+                self.wfile.write(("data: %s\n\n" % json.dumps(ev)).encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                gone["v"] = True
+                raise ConnectionAbortedError("the phone stopped listening")
+        try:
+            chat.send(b.get("conv"), b.get("text"), self._chat_hooks(), emit)
+        except ConnectionAbortedError:
+            pass
+        except Exception as e:
+            try:
+                emit({"t": "error", "d": str(e)[:400]})
+            except Exception:
+                pass
+        return None
+
+    def _chat_hooks(self):
+        def pc_status(a):
+            st = sysctl.status()
+            n = media.now_playing()
+            g = media.current_game()
+            return {"volume": st["volume"], "muted": st["muted"], "output": st.get("device"),
+                    "stats": {k: "%s %s" % (v["big"], v["unit"]) for k, v in sysctl.system_stats().items()
+                              if not v.get("na")},
+                    "now_playing": n and {k: n.get(k) for k in ("title", "artist", "appName", "playing", "pos", "dur")},
+                    "game": g and {"name": g["title"], "minutes_played": int(g["pos"] // 60)},
+                    "open_windows": [w["title"] for w in sysctl.running_windows()][:25]}
+
+        def media_control(a):
+            act = a.get("action")
+            if act in ("forward", "back"):
+                secs = int(a.get("seconds") or 10)
+                ok, err = media.skip(secs if act == "forward" else -secs)
+            else:
+                ok, err = media.command({"play_pause": "toggle", "next": "next",
+                                         "previous": "prev"}.get(act, "?"))
+            return {"ok": ok} if ok else {"error": err}
+
+        def set_volume(a):
+            if a.get("level") is not None:
+                sysctl.set_volume(max(0, min(100, int(a["level"]))))
+            if a.get("mute") is not None:
+                sysctl.set_mute(bool(a["mute"]))
+            return {"ok": True, "volume": sysctl.status()["volume"]}
+
+        def open_app(a):
+            want = re.sub(r"[^a-z0-9]", "", str(a.get("name", "")).lower())
+            items = library_items()
+            best = None
+            for it in items:
+                nm = re.sub(r"[^a-z0-9]", "", it["name"].lower())
+                if nm == want:
+                    best = it
+                    break
+                if want and (want in nm or nm in want) and best is None:
+                    best = it
+            if not best:
+                return {"error": "Nothing called that in the library",
+                        "some_library_items": [i["name"] for i in items][:40]}
+            sysctl.run_detached(self._launch_cmd(known_launches()[best["id"]]))
+            log("chat opened %s" % best["id"])
+            return {"ok": True, "opened": best["name"]}
+
+        def search_files(a):
+            folder = a.get("folder") or os.path.expanduser("~")
+            r = files.search(str(folder), str(a.get("query", ""))[:100], limit=40, budget=4)
+            return {"results": [{"name": e["name"], "path": e["path"], "folder": e["dir"],
+                                 "size": e["size"]} for e in r["entries"]]}
+
+        def read_text_file(a):
+            p = os.path.abspath(str(a.get("path", "")))
+            t = files.text_preview(p)
+            if t is None:
+                return {"error": "Can't read that file"}
+            if t.get("binary"):
+                return {"error": "That isn't a text file"}
+            return {"text": t["text"][:40000], "truncated": t["truncated"] or len(t["text"]) > 40000}
+
+        return {"pc_status": pc_status, "media_control": media_control, "set_volume": set_volume,
+                "open_app": open_app, "search_files": search_files, "read_text_file": read_text_file}
 
     def _shot(self):
         try:
@@ -2047,6 +2363,61 @@ def _claim_port(port):
         return True                            # never let the guard block a start
 
 
+_LOGIN_FAILS = {}
+_ICONS = {}            # short key -> exe path (only ones we listed)
+_MIC = {"at": 0.0, "v": None}
+
+
+def _icon_key(exe):
+    if not exe:
+        return ""
+    import hashlib
+    k = hashlib.sha1(exe.lower().encode("utf-8", "ignore")).hexdigest()[:12]
+    if len(_ICONS) > 400:
+        _ICONS.clear()
+    _ICONS[k] = exe
+    return k
+
+
+def _icon_path(k):
+    exe = _ICONS.get(k)
+    if not exe:
+        return None
+    p = media.icon_path(exe) if "\\windowsapps\\" in exe.lower() else layout.icon_for(exe)
+    return p if p and os.path.isfile(p) and p.lower().endswith(".png") else None
+
+
+def _app_name(exe, fallback):
+    if exe:
+        n = media._NAMES.get(os.path.basename(exe).lower()) or media._file_description(exe)
+        if n:
+            return n
+    return os.path.splitext(fallback or "")[0] or "App"
+
+
+def _mic_cached():
+    if time.time() - _MIC["at"] > 4:
+        _MIC["v"], _MIC["at"] = mixer.mic(), time.time()
+    return _MIC["v"]
+
+
+def _timer_fire(action):
+    log("sleep timer: %s" % action)
+    if action == "pause":
+        n = media.now_playing()
+        if n and n.get("playing"):
+            if not media.command("toggle")[0]:
+                sysctl.tap_key("playpause")
+    elif action == "mute":
+        sysctl.set_mute(True)
+    elif action == "screenoff":
+        sysctl.screen_off()
+    elif action == "lock":
+        sysctl.lock_workstation()
+    elif action in ("sleep", "shutdown"):
+        sysctl.run_detached(Handler.POWER[action])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default=CFG.get("host", "0.0.0.0"))
@@ -2066,6 +2437,9 @@ def main():
     # each game's artwork (yours if you dropped some in, else the scanned art).
     media.configure(items=library_items,
                     art_for=lambda it: Handler._custom_art_for(it["id"]) or it.get("art"))
+    timer.configure(run=_timer_fire, notify=push.notify_async)
+    watch.configure(game=media.current_game, stats=sysctl.system_stats,
+                    update=lambda: update.state())
 
     host = resolve_host(a.host)
 

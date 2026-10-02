@@ -43,7 +43,19 @@ From then on your phone has a grid of tiles you arrange yourself:
   thumbnails, previews of photos, video, music, PDFs and text. Pick several
   and download them as one zip, or upload from the phone into your own
   folders (it asks for Face ID / your PIN first).
-- **Media and power keys** — play/pause, skip, back/forward 10 or 30
+- **An AI chat, your own.** Set it up once in the PC app (Settings →
+  Chatbox): pick Claude, OpenAI, OpenRouter or a local Ollama model, paste a
+  key, pick a model, tick what it may do — search the web, check the PC,
+  control media and volume, open apps, read your files. Then it's a Chat tab
+  on your phone. The key never leaves the PC.
+- **Notifications you choose.** Downloads finishing, Steam updates, a new
+  phone signing in, the GPU running hot… each one Off, Quiet, Normal or
+  Important, per phone.
+- **More tiles:** sleep timer, volume mixer (per-app volume), audio output
+  switch, mic mute, open-window switcher, an in-game stats card, screenshot,
+  Discord mute/deafen, network speed. Hold any tile while editing to change
+  its name, size, colour and settings.
+- **Media and power keys** — play/pause, skip, back/forward 5 to 60
   seconds, lock, sleep, screen off.
 - **The whole desktop, live and usable.** Full screen, tap to click, hold to
   right-click, two fingers to scroll. Tap the box at the bottom and your
@@ -288,6 +300,11 @@ Everything else is the standard library or raw `ctypes`.
 | `games.py` | Now Playing: which game from your library is running |
 | `jellyfin.py` | Now Playing: Moonfin / Jellyfin, through the Jellyfin server |
 | `files.py` | the Files tab, and the rules for what it may read and write |
+| `chat.py` | the AI chat: providers, the built-in tools, history |
+| `push.py` | notifications (Web Push: encryption, VAPID, per-phone tiers) |
+| `watch.py` | what's worth a notification (downloads, Steam, health…) |
+| `mixer.py` | per-app volume and the microphone |
+| `timer.py` | the sleep timer |
 | `stream.py` | screen capture and input injection |
 | `library.py` | finding your games and their artwork |
 | `layout.py` | the tile model, the theme, icon extraction |

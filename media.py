@@ -557,6 +557,8 @@ async def _pump():
                     game = _read_game()
                 except Exception:
                     game = None
+                with _lock:
+                    _snap["game"], _snap["game_at"] = game, time.time()
             try:
                 jf = jellyfin.current(art_cb=store_art)
             except Exception:
@@ -611,6 +613,22 @@ def now_playing():
         v["pos"] = round(min(v["dur"], v["pos"] + (now - v["at"]) * v["rate"]), 2)
     v["at"] = now
     return v
+
+
+def current_game():
+    """The game being played (even when music is what Now Playing shows),
+    for the in-game card. None when no game is running."""
+    _want["at"] = time.time()
+    _start()
+    with _lock:
+        g = _snap.get("game")
+        at = _snap.get("game_at", 0)
+    if not g:
+        return None
+    g = dict(g)
+    g["pos"] = round(g["pos"] + time.time() - g["at"], 1)
+    g["at"] = time.time()
+    return g if time.time() - at < 10 else None
 
 
 def art(h):

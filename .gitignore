@@ -11,6 +11,12 @@ auth.json
 tls/
 # the Jellyfin sign-in Quick Connect gave this install (Now Playing)
 jellyfin.json
+# the chat's API key + history, notification keys + phones, the sleep timer
+chat.json
+chat_history.json
+push.json
+notifications.json
+timer.json
 
 # --- this install's state ----------------------------------------------------
 # NOTE: no trailing comments on these lines. In .gitignore a '#' only starts a

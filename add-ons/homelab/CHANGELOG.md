@@ -1,3 +1,9 @@
+# 0.4.0
+
+- Shared phone app synced with Aether Remote 1.5.0: **hold a tile while
+  editing** to open its settings - name, size, colour - and swipe down to save.
+  (The PC's new chat, notifications and tiles are PC-only.)
+
 # 0.3.4
 
 - Shared phone app synced with Aether Remote 1.4.2: holding a tile no

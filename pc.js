@@ -178,6 +178,9 @@ const ADDABLE = [
   ['slider:volume',   'Volume',         4, 1, 'Sound'],
   ['toggle:mute',     'Mute',           1, 1, 'Sound'],
   ['toggle:keeper',   'Lock volume',    2, 1, 'Sound'],
+  ['appvol:',         'Volume mixer',   4, 2, 'Sound'],
+  ['audioout:',       'Audio output',   2, 1, 'Sound'],
+  ['toggle:micmute',  'Mic',            1, 1, 'Sound'],
   ['nowplaying:',     'Now playing',    4, 2, 'Media'],
   ['action:media.playpause', 'Play/Pause', 1, 1, 'Media'],
   ['action:media.prev',      'Previous',   1, 1, 'Media'],
@@ -186,14 +189,22 @@ const ADDABLE = [
   ['action:media.fwd10',     'Forward 10s',1, 1, 'Media'],
   ['action:media.back30',    'Back 30s',   1, 1, 'Media'],
   ['action:media.fwd30',     'Forward 30s',1, 1, 'Media'],
+  ['timer:',                 'Sleep timer',2, 1, 'Media'],
   ['stream:0',        'Desktop preview',4, 2, 'Screen'],
   ['action:screen.off',      'Screen off', 1, 1, 'Screen'],
+  ['action:screen.shot',     'Screenshot', 1, 1, 'Screen'],
+  ['windows:',               'Open windows', 4, 2, 'Screen'],
+  ['gamestats:',             'In-game',    4, 2, 'Games & apps'],
+  ['chat:',                  'AI chat',    4, 2, 'Games & apps'],
+  ['action:discord.mute',    'Discord mute', 1, 1, 'Games & apps'],
+  ['action:discord.deafen',  'Discord deafen', 1, 1, 'Games & apps'],
   ['stat:cpu',        'CPU',            2, 1, 'Stats'],
   ['stat:gpu',        'GPU',            2, 1, 'Stats'],
   ['stat:ram',        'RAM',            2, 1, 'Stats'],
   ['stat:disk',       'Disk',           2, 1, 'Stats'],
   ['stat:temp',       'Temperature',    2, 1, 'Stats'],
   ['stat:battery',    'Battery',        2, 1, 'Stats'],
+  ['stat:net',        'Network',        2, 1, 'Stats'],
   ['action:power.lock',      'Lock PC',    2, 1, 'Power'],
   ['action:power.sleep',     'Sleep',      2, 1, 'Power'],
 ];
@@ -201,6 +212,7 @@ const ADDABLE = [
 /* Already on the remote somewhere? Then it's listed but can't be added twice. */
 function addedAlready(kr){
   const [kind, ref] = kr.split(':');
+  if (kind === 'appvol' || kind === 'timer') return false;     // several are fine
   return L.sections.some(s => s.tiles.some(t => t.kind === kind && String(t.ref || '') === (ref || '')));
 }
 
@@ -610,7 +622,19 @@ function viewSettings(){
   const t = L.theme;
   main.innerHTML = `
     <h2>Settings</h2>
-    <div class="sub">Network and appearance. Appearance is shared with the phone.</div>
+    <div class="sub">The chat, network and appearance. Appearance is shared with the phone.</div>
+
+    <div class="card" id="chatCard"><h3>Chatbox</h3><div class="muted">Loading…</div></div>
+
+    <div class="card">
+      <h3>Discord buttons</h3>
+      <div class="muted" style="font-size:12.5px;line-height:1.6">
+        The phone's Discord mute and deafen tiles press <b>Ctrl+Shift+M</b> and
+        <b>Ctrl+Shift+D</b>. Discord doesn't have those by default - set them once:
+        Discord → Settings → Keybinds → Add a Keybind → "Toggle Mute" =
+        Ctrl+Shift+M, and "Toggle Deafen" = Ctrl+Shift+D. They work even while a game has focus.
+      </div>
+    </div>
 
     <div class="card">
       <h3>Network</h3>
@@ -876,6 +900,7 @@ function viewSettings(){
       toast(e.target.checked ? 'Will start with Windows' : 'Will not start automatically');
     } catch(err){ toast(err.message); e.target.checked = !e.target.checked; }
   });
+  drawChatCard();
 }
 
 /* ======================= UPDATES =======================
@@ -1085,3 +1110,107 @@ async function tick(){
       <div class="sub">${esc(e.message)}</div>`;
   }
 })();
+
+/* ================= Chatbox (the phone's AI chat) =================
+ * Set up here, on the PC, because that's where the API key lives - it never
+ * goes to a phone. Pick a provider, paste a key, pick a model, choose what
+ * it may do. The phone gets a Chat tab once it's switched on. */
+let CHC = null;
+
+async function drawChatCard(){
+  const box = $('#chatCard');
+  if (!box) return;
+  try { CHC = await api('/api/chat/config'); }
+  catch(e){ box.innerHTML = '<h3>Chatbox</h3><div class="muted">' + esc(e.message) + '</div>'; return; }
+  const c = CHC, P = c.providers[c.provider] || {};
+  const needsKey = P.key;
+  const step = (n, title, body, done) => `<div class="cc-step ${done ? 'done' : ''}">
+      <div class="cc-n">${done ? '✓' : n}</div><div class="cc-b"><div class="cc-t">${title}</div>${body}</div></div>`;
+  box.innerHTML = `
+    <h3>Chatbox</h3>
+    <div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:6px">
+      An AI chat in the phone app, using your own AI account. Set it up once here -
+      your key stays on this PC and is never sent to a phone.</div>
+    ${step(1, 'Pick a provider', `
+      <select id="ccProv">${Object.entries(c.providers).map(([k, p]) =>
+        `<option value="${k}" ${k === c.provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      ${c.provider === 'custom' || c.provider === 'ollama' ? `<input id="ccBase" placeholder="${esc(P.base || 'https://…/v1')}" value="${esc(c.base_url)}" style="margin-top:8px;width:100%">
+        <div class="cc-d">${c.provider === 'ollama' ? 'Leave empty for Ollama on this PC. Install Ollama, then run a model once (e.g. <code>ollama run llama3.1</code>).' : 'Any OpenAI-compatible address - LM Studio, Groq, Together, your own server.'}</div>` : ''}`, true)}
+    ${needsKey ? step(2, 'Paste your API key', `
+      <div style="display:flex;gap:8px"><input id="ccKey" type="password" placeholder="${c.hasKey ? 'Saved (' + esc(c.keyHint) + ') - paste a new one to replace it' : 'Paste it here'}" style="flex:1" autocomplete="off">
+        <button class="btn" id="ccKeySave">Save key</button></div>
+      <div class="cc-d">Don't have one? <a href="${esc(P.keyUrl)}" target="_blank" rel="noopener">Get a key from ${esc(P.name)} ↗</a> - it takes a minute. You pay them for what you use.</div>`, c.hasKey) : ''}
+    ${step(needsKey ? 3 : 2, 'Pick a model', `
+      <div style="display:flex;gap:8px"><select id="ccModel" style="flex:1">${c.model ? `<option value="${esc(c.model)}" selected>${esc(c.model)}</option>` : '<option value="">Load the list →</option>'}</select>
+        <button class="btn" id="ccLoad">Load models</button></div>
+      <div class="cc-d" id="ccModelNote">Or type one: <input id="ccModelTxt" placeholder="model name" value="${esc(c.model)}" style="width:220px;padding:5px 8px;font-size:12px"></div>`, !!c.model)}
+    ${step(needsKey ? 4 : 3, 'What it can do', `
+      ${c.toolList.map(t => `<label class="row"><div class="t">${esc(t.name)}<div class="d">${esc(t.desc)}</div></div>
+        <input type="checkbox" data-cctool="${t.id}" ${c.tools.find(x => x.id === t.id).on ? 'checked' : ''}></label>`).join('')}
+      <label class="row"><div class="t">Web search engine<div class="d">Brave and Tavily need a free key and are reliable. DuckDuckGo needs nothing, but sometimes turns automated searches away.</div></div>
+        <select id="ccSearch">${Object.entries(c.searches).map(([k, v]) =>
+          `<option value="${k}" ${c.searchProvider === k ? 'selected' : ''}>${esc(v.name)}${v.key ? '' : ' (no key)'}</option>`).join('')}</select></label>
+      ${c.searches[c.searchProvider].key ? `<div style="display:flex;gap:8px;margin-top:4px"><input id="ccBraveKey" type="password" placeholder="${c.hasSearchKey ? 'Key saved - paste a new one to replace it' : esc(c.searches[c.searchProvider].name) + ' API key'}" style="flex:1"><button class="btn" id="ccBraveSave">Save</button></div>
+        <div class="cc-d"><a href="${esc(c.searches[c.searchProvider].keyUrl)}" target="_blank" rel="noopener">Get a free ${esc(c.searches[c.searchProvider].name)} key ↗</a></div>` : ''}
+      <div class="cc-d">It can never shut down, delete, type, click or run anything. Pages it reads can only come from search results or links you send it, so a web page can't steer it somewhere else.</div>`, true)}
+    ${step(needsKey ? 5 : 4, 'Instructions (optional)', `
+      <textarea id="ccSystem" rows="3" style="width:100%" placeholder="${esc(c.defaultSystem)}">${esc(c.system)}</textarea>
+      <div class="cc-d">How it should talk to you - leave empty for the default.</div>`, true)}
+    <div class="cc-end">
+      <button class="btn" id="ccTest">Test it</button>
+      <span class="muted" id="ccTestOut" style="font-size:12px;flex:1"></span>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px">Show Chat on my phones
+        <input type="checkbox" id="ccOn" ${c.enabled ? 'checked' : ''}></label>
+    </div>`;
+
+  const save = async (b, msg) => {
+    try { CHC = await api('/api/chat/config', b); if (msg) toast(msg); return true; }
+    catch(e){ toast(e.message); return false; }
+  };
+  $('#ccProv').onchange = async e => { await save({ provider: e.target.value, base_url: '', model: '' }); drawChatCard(); };
+  const base = $('#ccBase');
+  if (base) base.onchange = () => save({ base_url: base.value.trim() }, 'Saved');
+  const ks = $('#ccKeySave');
+  if (ks) ks.onclick = async () => {
+    const k = $('#ccKey').value.trim();
+    if (!k) return toast('Paste the key first');
+    if (await save({ api_key: k }, 'Key saved')){ await drawChatCard(); loadModels(); }
+  };
+  $('#ccLoad').onclick = loadModels;
+  $('#ccModel').onchange = e => { if (e.target.value){ $('#ccModelTxt').value = e.target.value; save({ model: e.target.value }, 'Model saved').then(drawChatCard); } };
+  $('#ccModelTxt').onchange = e => save({ model: e.target.value.trim() }, 'Model saved').then(drawChatCard);
+  box.querySelectorAll('[data-cctool]').forEach(cb => cb.onchange = () =>
+    save({ tools: { [cb.dataset.cctool]: cb.checked } }, cb.checked ? 'Allowed' : 'Switched off'));
+  $('#ccSearch').onchange = async e => { await save({ search: { provider: e.target.value } }); drawChatCard(); };
+  const bk = $('#ccBraveSave');
+  if (bk) bk.onclick = () => save({ search: { key: $('#ccBraveKey').value.trim() } }, 'Saved').then(drawChatCard);
+  $('#ccSystem').onchange = e => save({ system: e.target.value }, 'Saved');
+  $('#ccOn').onchange = async e => {
+    if (e.target.checked && !(CHC.model && (CHC.hasKey || !CHC.providers[CHC.provider].key))){
+      e.target.checked = false; return toast('Finish the steps above first');
+    }
+    await save({ enabled: e.target.checked }, e.target.checked ? 'Chat is on - it shows on your phones now' : 'Chat is off');
+    refreshPreview();
+  };
+  $('#ccTest').onclick = async () => {
+    const out = $('#ccTestOut');
+    out.textContent = 'Asking…'; out.style.color = '';
+    try { const r = await api('/api/chat/test', {}); out.textContent = `Works - it replied "${r.reply}" in ${(r.ms / 1000).toFixed(1)}s`; out.style.color = 'var(--good)'; }
+    catch(e){ out.textContent = e.message; out.style.color = 'var(--bad)'; }
+  };
+}
+
+async function loadModels(){
+  const sel = $('#ccModel'), note = $('#ccModelNote');
+  if (!sel) return;
+  sel.innerHTML = '<option>Loading…</option>';
+  try {
+    const r = await api('/api/chat/models', {});
+    if (!r.models.length) throw new Error('No models came back - type the name instead');
+    sel.innerHTML = `<option value="">Choose a model (${r.models.length})</option>` + r.models.map(m =>
+      `<option value="${esc(m.id)}" ${m.id === CHC.model ? 'selected' : ''}>${esc(m.name)}${m.name !== m.id ? ' - ' + esc(m.id) : ''}</option>`).join('');
+  } catch(e){
+    sel.innerHTML = `<option value="${esc(CHC.model || '')}">${esc(CHC.model || 'Couldn\'t load')}</option>`;
+    toast(e.message);
+  }
+}

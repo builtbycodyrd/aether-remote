@@ -143,9 +143,14 @@ def sanitize(incoming, ok_guest, ok_service, ok_docker, link_ids):
                 h = max(1, min(6, int(t.get("h", 1))))
             except Exception:
                 w, h = 1, 1
-            tiles.append({"id": re.sub(r"[^A-Za-z0-9_-]", "", str(t.get("id") or new_id()))[:32] or new_id(),
-                          "kind": kind, "w": w, "h": h, "ref": ref,
-                          "label": str(t.get("label", ""))[:60]})
+            clean = {"id": re.sub(r"[^A-Za-z0-9_-]", "", str(t.get("id") or new_id()))[:32] or new_id(),
+                     "kind": kind, "w": w, "h": h, "ref": ref,
+                     "label": str(t.get("label", ""))[:60]}
+            # The tile's own colour, from its settings sheet - literal hex only.
+            acc = str(t.get("accent") or "")
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", acc):
+                clean["accent"] = acc.lower()
+            tiles.append(clean)
         out["sections"].append({
             "id": re.sub(r"[^A-Za-z0-9_-]", "", str(sec.get("id") or new_id()))[:32] or new_id(),
             "name": str(sec.get("name", "Section"))[:40],

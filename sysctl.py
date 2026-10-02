@@ -10,6 +10,7 @@ import base64
 import ctypes
 import ctypes.wintypes as wt
 import json
+import math
 import os
 import queue
 import threading
@@ -412,16 +413,77 @@ def _read_gpu():
         return None
 
 
+class MIB_IFROW(Structure):
+    _fields_ = [("wszName", ctypes.c_wchar * 256), ("dwIndex", wt.DWORD), ("dwType", wt.DWORD),
+                ("dwMtu", wt.DWORD), ("dwSpeed", wt.DWORD), ("dwPhysAddrLen", wt.DWORD),
+                ("bPhysAddr", c_ubyte * 8), ("dwAdminStatus", wt.DWORD), ("dwOperStatus", wt.DWORD),
+                ("dwLastChange", wt.DWORD), ("dwInOctets", wt.DWORD), ("dwInUcastPkts", wt.DWORD),
+                ("dwInNUcastPkts", wt.DWORD), ("dwInDiscards", wt.DWORD), ("dwInErrors", wt.DWORD),
+                ("dwInUnknownProtos", wt.DWORD), ("dwOutOctets", wt.DWORD), ("dwOutUcastPkts", wt.DWORD),
+                ("dwOutNUcastPkts", wt.DWORD), ("dwOutDiscards", wt.DWORD), ("dwOutErrors", wt.DWORD),
+                ("dwOutQLen", wt.DWORD), ("dwDescrLen", wt.DWORD), ("bDescr", c_ubyte * 256)]
+
+
+_VIRTUAL = ("virtual", "hyper-v", "vpn", "tailscale", "wintun", "loopback", "npcap",
+            "vmware", "virtualbox", "wan miniport", "bluetooth", "filter", "qos", "tap-")
+
+
+def _net_octets():
+    """Bytes in/out so far on the real network adapters (32-bit counters,
+    so callers handle the wrap). Virtual adapters (Tailscale, Hyper-V) are
+    left out - their traffic also crosses the real card and would count
+    twice."""
+    iph = ctypes.windll.iphlpapi
+    size = wt.DWORD(0)
+    iph.GetIfTable(None, byref(size), False)
+    buf = ctypes.create_string_buffer(size.value)
+    if iph.GetIfTable(buf, byref(size), False) != 0:
+        return None
+    n = ctypes.cast(buf, POINTER(wt.DWORD))[0]
+    rows = ctypes.cast(ctypes.addressof(buf) + 4, POINTER(MIB_IFROW))
+    seen, tin, tout = set(), 0, 0
+    for i in range(n):
+        r = rows[i]
+        if r.dwType not in (6, 71) or r.dwOperStatus not in (1, 5):
+            continue
+        desc = bytes(r.bDescr[:r.dwDescrLen]).split(b"\0")[0].decode("latin-1", "ignore").lower()
+        if any(v in desc for v in _VIRTUAL):
+            continue
+        # One card shows up several times (one row per filter driver).
+        key = bytes(r.bPhysAddr[:r.dwPhysAddrLen])
+        if key in seen:
+            continue
+        seen.add(key)
+        tin += r.dwInOctets
+        tout += r.dwOutOctets
+    return tin, tout
+
+
 _stat_lock = threading.Lock()
-_stat_cache = {"cpu": None, "gpu": None}
+_stat_cache = {"cpu": None, "gpu": None, "net": None}
 _stat_thread = None
 
 
 def _stat_loop():
     prev = _cpu_times()
     i = 0
+    nprev = (time.time(), _net_octets())
     while True:
         time.sleep(1.5)
+        try:
+            now, cur = time.time(), _net_octets()
+            if cur and nprev[1]:
+                dt = now - nprev[0]
+                down = (cur[0] - nprev[1][0]) % (1 << 32)
+                up = (cur[1] - nprev[1][1]) % (1 << 32)
+                net = {"down": down * 8 / dt / 1e6, "up": up * 8 / dt / 1e6}   # Mbit/s
+            else:
+                net = None
+            nprev = (now, cur)
+        except Exception:
+            net = None
+        with _stat_lock:
+            _stat_cache["net"] = net
         try:
             idle, total = _cpu_times()
             dt = total - prev[1]
@@ -490,6 +552,7 @@ def system_stats():
     with _stat_lock:
         cpu = _stat_cache.get("cpu")
         gpu = _stat_cache.get("gpu")
+        net = _stat_cache.get("net")
     mem = memory_info()
     disk = disk_info()
     bat = battery_info()
@@ -510,6 +573,17 @@ def system_stats():
     else:
         out["gpu"] = _na("GPU")
         out["temp"] = _na("Temp")
+    if net:
+        def f(x):
+            return ("%.1f" % x) if x < 10 else str(int(round(x)))
+        out["net"] = {"label": "Network", "big": f(net["down"]),
+                      "unit": "Mbps down · %s up" % f(net["up"]),
+                      # bar on a log-ish scale: 1 Mbps ~ 20%, 100 Mbps ~ 80%
+                      "pct": max(0, min(100, int(20 + 30 * math.log10(max(net["down"], 0.1)))))}
+    else:
+        out["net"] = _na("Network")
+    if gpu:
+        out["gpu"]["vram"] = gpu["memPct"]
     if bat:
         out["battery"] = {"label": "Battery", "big": str(bat["pct"]),
                           "unit": "% ⚡" if bat["charging"] else "%",
@@ -704,7 +778,7 @@ def running_windows():
             if name.lower() in _SKIP_PROC:
                 return 1
             seen.add(pid.value)
-            out.append({"pid": pid.value, "process": name,
+            out.append({"pid": pid.value, "process": name, "hwnd": int(hwnd or 0),
                         "title": title[:90]})
         except Exception:
             pass
@@ -713,6 +787,38 @@ def running_windows():
     user32.EnumWindows(WNDENUMPROC(cb), 0)
     out.sort(key=lambda w: (w["process"].lower(), w["title"].lower()))
     return out[:60]
+
+
+def focus_window(hwnd):
+    """Bring a window to the front (restoring it if minimised). Windows only
+    lets the foreground app hand focus over, so tap Alt first - the
+    documented way around that lock."""
+    hwnd = int(hwnd)
+    if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+        return {"ok": False, "error": "that window has closed"}
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)             # SW_RESTORE
+    user32.keybd_event(0x12, 0, 0, 0)          # Alt down
+    user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
+    ok = bool(user32.SetForegroundWindow(hwnd))
+    user32.BringWindowToTop(hwnd)
+    return {"ok": ok}
+
+
+def window_exe(hwnd):
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(int(hwnd), byref(pid))
+    h = kernel32.OpenProcess(0x1000, False, pid.value)
+    if not h:
+        return ""
+    try:
+        size = wt.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(1024)
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, byref(size)):
+            return buf.value
+    finally:
+        kernel32.CloseHandle(h)
+    return ""
 
 
 def end_task(pid):

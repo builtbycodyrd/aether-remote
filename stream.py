@@ -475,8 +475,12 @@ VK = {
     "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
     "win": 0x5B, "ctrl": 0x11, "alt": 0x12, "shift": 0x10,
     "f4": 0x73, "f5": 0x74, "f11": 0x7A,
-    "a": 0x41, "c": 0x43, "v": 0x56, "x": 0x58, "z": 0x5A,
 }
+# Every letter, digit and F-key, so any shortcut a real keyboard sends works.
+VK.update({chr(c): c for c in range(0x41, 0x5B)})
+VK.update({chr(c).lower(): c for c in range(0x41, 0x5B)})
+VK.update({str(d): 0x30 + d for d in range(10)})
+VK.update({"f%d" % n: 0x6F + n for n in range(1, 25)})
 
 
 def press(name, mods=None):
