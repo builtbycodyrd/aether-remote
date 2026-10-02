@@ -3898,6 +3898,7 @@ function showTab(which){
   if (c){
     c.classList.toggle('show', chatOn);
     if (chatOn){ chDraw(); if (window.visualViewport){ c.style.height = visualViewport.height + 'px'; } }
+    else { chPopClose(); chDrawerClose(); }
   }
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === which));
   if (!files) fvCloseView();
@@ -4441,7 +4442,7 @@ function md(src){
 function chBuild(){
   const el = document.createElement('div');
   el.id = 'chat';
-  el.innerHTML = `<div class="ch-head"><button class="fv-ib" data-ch="hist" aria-label="Conversations">${XI.list}</button>
+  el.innerHTML = `<div class="ch-head"><button class="fv-ib" data-ch="drawer" aria-label="Chats and memory">${XI.list}</button>
       <button class="ch-title" type="button" data-ch="model"><b>Chat</b><span class="ch-model"></span></button>
       <button class="fv-ib" data-ch="new" aria-label="New chat">${XI.plus}</button></div>
     <div class="ch-scroll"><div class="ch-msgs"></div></div>
@@ -4449,14 +4450,64 @@ function chBuild(){
       <textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea>
       <div class="ch-row"><button type="button" class="ch-pill" data-ch="model" aria-label="Change model">
         <span class="ch-pm"></span>${XI.down}</button><div class="ch-sp"></div>
-        <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></div></div></form>`;
+        <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></div></div></form>
+    <div class="ch-pop" role="menu"></div>
+    <div class="ch-drawer"><div class="ch-dscrim" data-ch="dclose"></div>
+      <aside class="ch-dpanel"><div class="ch-dhead"><b>Chats</b>
+        <button class="fv-ib" data-ch="new" aria-label="New chat">${XI.plus}</button></div>
+        <div class="ch-dbody"></div></aside></div>`;
   document.body.appendChild(el);
-  const ta = el.querySelector('textarea'), form = el.querySelector('form');
+  const ta = el.querySelector('textarea'), form = el.querySelector('form'), sc = el.querySelector('.ch-scroll');
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; chBtn(); };
   ta.addEventListener('input', grow);
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)){ e.preventDefault(); form.requestSubmit(); } });
-  ta.addEventListener('focus', () => document.body.classList.add('kbd'));
-  ta.addEventListener('blur', () => setTimeout(() => document.body.classList.remove('kbd'), 120));
+
+  /* The keyboard. iPhone's keyboard rises over the page and Safari then
+     shoves the page up to keep the box in view - that shove is the jolt. So
+     the chat shrinks to fit *as* the keyboard rises (we remember how tall it
+     was last time), with the same easing, and the conversation stays pinned
+     to its last message the whole way. The real size, when the phone
+     reports it, just corrects the guess. */
+  let kbGuess = 0, blurT = 0;
+  try { kbGuess = +localStorage.getItem('aether.kb') || 0; } catch(e){}
+  const atBottom = () => sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80;
+  const pin = (ms) => {
+    if (!atBottom() && !CH.busy) return;
+    const end = performance.now() + ms;
+    const step = () => { sc.scrollTop = sc.scrollHeight; if (performance.now() < end) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  };
+  const fit = () => {
+    if (!el.classList.contains('show') || !window.visualViewport) return;
+    const vv = visualViewport, kb = window.innerHeight - vv.height;
+    if (kb > 150){ kbGuess = kb; try { localStorage.setItem('aether.kb', Math.round(kb)); } catch(e){} }
+    el.style.top = vv.offsetTop + 'px';
+    el.style.height = vv.height + 'px';
+    pin(420);
+  };
+  CH.fit = fit;
+  if (window.visualViewport){
+    let q = 0;
+    const later = () => { if (!q) q = requestAnimationFrame(() => { q = 0; fit(); }); };
+    visualViewport.addEventListener('resize', later);
+    visualViewport.addEventListener('scroll', later);
+  }
+  ta.addEventListener('focus', () => {
+    clearTimeout(blurT);
+    chPopClose();
+    document.body.classList.add('kbd');
+    try { kbGuess = +localStorage.getItem('aether.kb') || kbGuess; } catch(e){}
+    const vv = window.visualViewport;
+    if (kbGuess && vv && vv.height > window.innerHeight - 60) el.style.height = (window.innerHeight - kbGuess) + 'px';
+    pin(450);
+  });
+  ta.addEventListener('blur', () => {
+    blurT = setTimeout(() => {
+      document.body.classList.remove('kbd');
+      if (window.visualViewport && visualViewport.height > window.innerHeight - 60) el.style.height = window.innerHeight + 'px';
+    }, 60);
+  });
+
   form.addEventListener('submit', e => {
     e.preventDefault();
     if (CH.busy){ if (CH.ctrl) CH.ctrl.abort(); return; }
@@ -4465,57 +4516,130 @@ function chBuild(){
     ta.value = ''; grow();
     chSend(text);
   });
+  // Buttons act on pointer-up when the press started on them: a tap that
+  // blurs the keyboard (and moves the page) still lands where you aimed.
+  let downOn = null;
+  el.addEventListener('pointerdown', e => { downOn = e.target.closest('[data-ch]'); }, true);
+  el.addEventListener('pointerup', e => {
+    const b = downOn; downOn = null;
+    if (!b || !b.isConnected || e.button > 0) return;
+    const r = b.getBoundingClientRect();
+    if (e.clientX < r.left - 24 || e.clientX > r.right + 24 || e.clientY < r.top - 24 || e.clientY > r.bottom + 24) return;
+    e.preventDefault();
+    chAct(b);
+    b.dataset.fired = Date.now();
+  });
   el.addEventListener('click', e => {
     const b = e.target.closest('[data-ch]');
-    if (b && b.dataset.ch === 'new'){ if (CH.ctrl) CH.ctrl.abort(); CH.conv = null; CH.msgs = []; chDraw(); ta.focus(); }
-    if (b && b.dataset.ch === 'hist') chHistory();
-    if (b && b.dataset.ch === 'model') chModels();
-    if (b && b.dataset.ch === 'memory') memOpen();
+    if (b){ if (Date.now() - (+b.dataset.fired || 0) > 600) chAct(b); return; }
     const sug = e.target.closest('[data-chsug]');
-    if (sug){ chSend(sug.dataset.chsug); }
+    if (sug){ chSend(sug.dataset.chsug); return; }
+    if (!e.target.closest('.ch-pop')) chPopClose();
   });
-  if (window.visualViewport){
-    const fit = () => {
-      if (!el.classList.contains('show')) return;
-      el.style.height = visualViewport.height + 'px';
-      el.style.top = visualViewport.offsetTop + 'px';
-    };
-    visualViewport.addEventListener('resize', fit);
-    visualViewport.addEventListener('scroll', fit);
-  }
+  el.querySelector('.ch-dbody').addEventListener('click', chDrawerClick);
   return el;
+}
+function chAct(b){
+  const a = b.dataset.ch, ta = chEl().querySelector('textarea');
+  if (a === 'new'){ chDrawerClose(); chPopClose(); if (CH.ctrl) CH.ctrl.abort(); CH.conv = null; CH.msgs = []; chDraw(); }
+  else if (a === 'drawer'){ chPopClose(); ta.blur(); chDrawerOpen(); }
+  else if (a === 'dclose') chDrawerClose();
+  else if (a === 'model'){ const p = chEl().querySelector('.ch-pop'); p.classList.contains('show') ? chPopClose() : chModels(b); }
+  else if (a === 'memory'){ chDrawerClose(); ta.blur(); memOpen(); }
 }
 const chShort = id => String(id || '').split('/').pop();
 
-/* The model picker: what the PC's provider has, one tap to switch. The key
-   and the provider stay on the PC - the phone only ever picks from the list. */
-async function chModels(){
-  const cur = (CH.info || {}).model || '';
-  openSheet('Model', '<div class="ch-mload"><span class="spin"></span>Looking for models…</div>',
-    '<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>');
-  $('#sheetClose').onclick = closeSheet;
-  let j;
-  try { j = await api('/api/chat/models'); }
-  catch(err){ $('#sheetBody').innerHTML = `<div class="ch-mload bad">${esc(err.message)}</div>`; return; }
-  if (!$('#sheet').classList.contains('show')) return;
-  const ms = j.models || [];
-  $('#sheetBody').innerHTML = `<div class="ch-mprov">${esc((CH.info || {}).providerName || '')}</div>
-    <div class="ch-mlist">${ms.map(m => `<button class="ch-mi${m.id === cur ? ' on' : ''}" data-chpick="${esc(m.id)}">
-      <span class="ch-mt"><b>${esc(chShort(m.id))}</b>${m.id.includes('/') ? `<em>${esc(m.id.split('/')[0])}</em>` : ''}
-      ${m.detail || m.loaded ? `<small>${esc([m.detail, m.loaded ? 'loaded · instant' : ''].filter(Boolean).join(' · '))}</small>` : ''}</span>
-      <i>${m.id === cur ? XI.check : ''}</i></button>`).join('') || '<div class="ch-mload">No models found.</div>'}</div>
-    <div class="ch-mnote">Models and keys are set up in the PC app (Settings › Chatbox).</div>`;
-  $('#sheetBody').querySelectorAll('[data-chpick]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.chpick;
-    if (id === cur){ closeSheet(); return; }
-    b.classList.add('busy');
+/* ---- the model menu: a small menu that grows out of the button you
+   tapped. Only models - nothing else lives here. The key and the provider
+   stay on the PC; the phone only ever picks from the list. */
+async function chModels(anchor){
+  const el = chEl(), pop = el.querySelector('.ch-pop');
+  const fromPill = anchor && anchor.classList.contains('ch-pill');
+  const er = el.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
+  pop.classList.toggle('up', fromPill);
+  pop.style.left = fromPill ? Math.max(10, ar.left - er.left) + 'px' : '50%';
+  pop.style.top = fromPill ? '' : (ar.bottom - er.top + 6) + 'px';
+  pop.style.bottom = fromPill ? (er.bottom - ar.top + 8) + 'px' : '';
+  const paint = () => {
+    const cur = (CH.info || {}).model || '', ms = CH.models;
+    pop.innerHTML = `<div class="ch-ph"><span>Model</span><em>${esc((CH.info || {}).providerName || '')}</em></div>
+      ${ms ? (ms.length ? ms.map(m => `<button class="ch-pi${m.id === cur ? ' on' : ''}" data-chpick="${esc(m.id)}" role="menuitem">
+        <span class="ch-pt"><b>${esc(chShort(m.id))}</b><small>${esc([m.id.includes('/') ? m.id.split('/')[0] : '', m.detail,
+          m.loaded ? 'ready' : ''].filter(Boolean).join(' · '))}</small></span>
+        ${m.loaded ? '<i class="ch-live-dot"></i>' : ''}<i class="ch-pc">${m.id === cur ? XI.check : ''}</i></button>`).join('')
+        : '<div class="ch-pnote">No models found on the PC.</div>')
+        : '<div class="ch-pnote"><span class="spin"></span>Looking…</div>'}`;
+    pop.querySelectorAll('[data-chpick]').forEach(b => b.onclick = e => { e.stopPropagation(); chPick(b.dataset.chpick, b); });
+  };
+  paint();
+  requestAnimationFrame(() => pop.classList.add('show'));
+  try { CH.models = (await api('/api/chat/models')).models || []; }
+  catch(err){ if (!CH.models){ pop.innerHTML = `<div class="ch-pnote bad">${esc(err.message)}</div>`; return; } }
+  if (pop.classList.contains('show')) paint();
+}
+async function chPick(id, b){
+  if (id === (CH.info || {}).model){ chPopClose(); return; }
+  b.classList.add('busy');
+  try {
+    const r = await api('/api/chat/model', { model: id });
+    CH.info = Object.assign(CH.info || {}, r);
+    chPopClose(); chDraw();
+    toast('Now using ' + chShort(id));
+  } catch(err){ b.classList.remove('busy'); toast(err.message); }
+}
+function chPopClose(){ const el = chEl(); if (el) el.querySelector('.ch-pop').classList.remove('show'); }
+
+/* ---- the drawer (the ☰ button): your memory, and your chats. It opens at
+   once from what's already loaded, then refreshes. */
+function chDrawerOpen(){
+  const el = chEl(); if (!el) return;
+  chDrawerPaint();
+  el.querySelector('.ch-drawer').classList.add('open');
+  document.body.classList.add('chDrawer');
+  api('/api/chat').then(j => { CH.info = Object.assign(CH.info || {}, j); chDrawerPaint(); }).catch(() => {});
+}
+function chDrawerClose(){ const el = chEl(); if (el) el.querySelector('.ch-drawer').classList.remove('open'); document.body.classList.remove('chDrawer'); }
+function chDrawerPaint(){
+  const el = chEl(), body = el.querySelector('.ch-dbody'), j = CH.info || {}, convs = j.convs || [];
+  const mem = (j.tools || []).find(t => t.id === 'memory' && t.on);
+  const day = ts => { const d = new Date(ts * 1000), now = new Date();
+    return d.toDateString() === now.toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+  body.innerHTML = `${mem ? `<button class="ch-memrow" data-ch="memory">${XI.graph}<span><b>Memory</b>
+      <small>${j.memory ? `${j.memory} thing${j.memory === 1 ? '' : 's'} it knows about you` : 'Nothing saved yet'}</small></span>${FVI.chev}</button>` : ''}
+    <div class="ch-dlabel">Recent</div>
+    <div class="ch-dlist">${convs.map(c => `<div class="ch-ci${c.id === CH.conv ? ' on' : ''}" data-chopen="${esc(c.id)}">
+        <span class="ch-ct"><b>${esc(c.title || 'Chat')}</b><small>${day(c.updated)}</small></span>
+        <button class="ch-cdel" data-chdel="${esc(c.id)}" aria-label="Delete">${XI.trash}</button></div>`).join('')
+      || '<div class="ch-dnone">No chats yet.</div>'}</div>
+    ${convs.length ? '<button class="ch-dclear" data-chclear>Delete all chats</button>' : ''}`;
+}
+async function chDrawerClick(e){
+  const del = e.target.closest('[data-chdel]'), open = e.target.closest('[data-chopen]'), clear = e.target.closest('[data-chclear]');
+  if (del){
+    e.stopPropagation();
+    const row = del.closest('.ch-ci');
+    if (!row.classList.contains('sure')){ row.classList.add('sure'); setTimeout(() => row.classList.remove('sure'), 3000); return; }
     try {
-      const r = await api('/api/chat/model', { model: id });
-      CH.info = Object.assign(CH.info || {}, r);
-      chDraw(); closeSheet();
-      toast('Now using ' + chShort(id));
-    } catch(err){ b.classList.remove('busy'); toast(err.message); }
-  });
+      const j = await api('/api/chat/delete', { id: del.dataset.chdel });
+      CH.info.convs = j.convs;
+      if (CH.conv === del.dataset.chdel){ CH.conv = null; CH.msgs = []; chDraw(); }
+      chDrawerPaint();
+    } catch(err){ toast(err.message); }
+    return;
+  }
+  if (clear){
+    if (!clear.dataset.sure){ clear.dataset.sure = 1; clear.textContent = 'Sure? Tap again to delete every chat'; clear.classList.add('sure'); return; }
+    try { await api('/api/chat/clear', {}); CH.info.convs = []; CH.conv = null; CH.msgs = []; chDraw(); chDrawerPaint(); } catch(err){ toast(err.message); }
+    return;
+  }
+  if (open){
+    try {
+      const c = await api('/api/chat/conv?id=' + encodeURIComponent(open.dataset.chopen));
+      CH.conv = c.id; CH.msgs = c.messages.map(m => ({ role: m.role, text: m.text, tools: (m.tools || []) }));
+      chDrawerClose(); chDraw();
+    } catch(err){ toast(err.message); }
+  }
 }
 function chBtn(){
   const el = chEl(); if (!el) return;
@@ -4610,39 +4734,6 @@ async function chSend(text){
   CH.busy = false; CH.ctrl = null;
   CH.last = ai.text ? ai.text.slice(0, 140) : CH.last;
   chPatchLast(); chBtn();
-}
-async function chHistory(){
-  let j;
-  try { j = await api('/api/chat'); } catch(err){ toast(err.message); return; }
-  const day = ts => new Date(ts * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
-  const mem = (CH.info || {}).tools && CH.info.tools.find(t => t.id === 'memory' && t.on);
-  openSheet('Conversations', `${mem ? `<button class="ch-memrow" data-chmem>${XI.graph}<span><b>Memory</b>
-      <small>${j.memory ? `${j.memory} thing${j.memory === 1 ? '' : 's'} it knows about you · see the map` : 'Nothing saved yet'}</small></span>${FVI.chev}</button>` : ''}
-    <div style="margin-top:8px">${(j.convs || []).map(c => `
-      <div class="srow" style="cursor:pointer" data-chopen="${esc(c.id)}"><div style="flex-grow:1;min-width:0">
-        <div class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.title || 'Chat')}</div>
-        <div class="d">${day(c.updated)} · ${Math.ceil(c.n / 2)} message${c.n > 2 ? 's' : ''}</div></div>
-        <button class="btn sm" data-chdel="${esc(c.id)}" aria-label="Delete">${XI.trash}</button></div>`).join('')
-      || '<div class="srow"><div class="d">No conversations yet.</div></div>'}</div>`,
-    `${(j.convs || []).length ? '<button class="btn" id="chClear">Delete all</button>' : ''}<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
-  $('#sheetClose').onclick = closeSheet;
-  const mr = $('#sheetBody').querySelector('[data-chmem]');
-  if (mr) mr.onclick = memOpen;
-  const cl = $('#chClear');
-  if (cl) cl.onclick = async () => { if (cl.dataset.sure){ await api('/api/chat/clear', {}); CH.conv = null; CH.msgs = []; chDraw(); closeSheet(); } else { cl.dataset.sure = 1; cl.textContent = 'Sure? Tap again'; cl.classList.add('danger'); } };
-  $('#sheetBody').querySelectorAll('[data-chdel]').forEach(b => b.onclick = async e => {
-    e.stopPropagation();
-    await api('/api/chat/delete', { id: b.dataset.chdel });
-    if (CH.conv === b.dataset.chdel){ CH.conv = null; CH.msgs = []; chDraw(); }
-    chHistory();
-  });
-  $('#sheetBody').querySelectorAll('[data-chopen]').forEach(r => r.onclick = async () => {
-    try {
-      const c = await api('/api/chat/conv?id=' + encodeURIComponent(r.dataset.chopen));
-      CH.conv = c.id; CH.msgs = c.messages.map(m => ({ role: m.role, text: m.text, tools: (m.tools || []) }));
-      closeSheet(); chDraw();
-    } catch(err){ toast(err.message); }
-  });
 }
 async function chLoad(){
   if (!isPC()) return;
