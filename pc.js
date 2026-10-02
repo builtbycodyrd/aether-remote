@@ -1147,7 +1147,7 @@ async function drawChatCard(){
     ${step(needsKey ? 4 : 3, 'What it can do', `
       ${c.toolList.map(t => `<label class="row"><div class="t">${esc(t.name)}<div class="d">${esc(t.desc)}</div></div>
         <input type="checkbox" data-cctool="${t.id}" ${c.tools.find(x => x.id === t.id).on ? 'checked' : ''}></label>`).join('')}
-      <label class="row"><div class="t">Web search engine<div class="d">Brave and Tavily need a free key and are reliable. DuckDuckGo needs nothing, but sometimes turns automated searches away.</div></div>
+      <label class="row"><div class="t">Web search engine<div class="d">Brave and Tavily need a free key and are reliable. The free option needs nothing: it tries DuckDuckGo, then Bing, if one turns a search away.</div></div>
         <select id="ccSearch">${Object.entries(c.searches).map(([k, v]) =>
           `<option value="${k}" ${c.searchProvider === k ? 'selected' : ''}>${esc(v.name)}${v.key ? '' : ' (no key)'}</option>`).join('')}</select></label>
       ${c.searches[c.searchProvider].key ? `<div style="display:flex;gap:8px;margin-top:4px"><input id="ccBraveKey" type="password" placeholder="${c.hasSearchKey ? 'Key saved - paste a new one to replace it' : esc(c.searches[c.searchProvider].name) + ' API key'}" style="flex:1"><button class="btn" id="ccBraveSave">Save</button></div>

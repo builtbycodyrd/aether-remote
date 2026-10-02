@@ -3939,6 +3939,7 @@ const XI = {
   stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/></svg>',
@@ -4439,11 +4440,14 @@ function chBuild(){
   const el = document.createElement('div');
   el.id = 'chat';
   el.innerHTML = `<div class="ch-head"><button class="fv-ib" data-ch="hist" aria-label="Conversations">${XI.list}</button>
-      <div class="ch-title"><b>Chat</b><span class="ch-model"></span></div>
+      <button class="ch-title" type="button" data-ch="model"><b>Chat</b><span class="ch-model"></span></button>
       <button class="fv-ib" data-ch="new" aria-label="New chat">${XI.plus}</button></div>
     <div class="ch-scroll"><div class="ch-msgs"></div></div>
-    <form class="ch-comp" autocomplete="off"><textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea>
-      <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></form>`;
+    <form class="ch-comp" autocomplete="off"><div class="ch-box">
+      <textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+      <div class="ch-row"><button type="button" class="ch-pill" data-ch="model" aria-label="Change model">
+        <span class="ch-pm"></span>${XI.down}</button><div class="ch-sp"></div>
+        <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></div></div></form>`;
   document.body.appendChild(el);
   const ta = el.querySelector('textarea'), form = el.querySelector('form');
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; chBtn(); };
@@ -4463,6 +4467,7 @@ function chBuild(){
     const b = e.target.closest('[data-ch]');
     if (b && b.dataset.ch === 'new'){ if (CH.ctrl) CH.ctrl.abort(); CH.conv = null; CH.msgs = []; chDraw(); ta.focus(); }
     if (b && b.dataset.ch === 'hist') chHistory();
+    if (b && b.dataset.ch === 'model') chModels();
     const sug = e.target.closest('[data-chsug]');
     if (sug){ chSend(sug.dataset.chsug); }
   });
@@ -4476,6 +4481,38 @@ function chBuild(){
     visualViewport.addEventListener('scroll', fit);
   }
   return el;
+}
+const chShort = id => String(id || '').split('/').pop();
+
+/* The model picker: what the PC's provider has, one tap to switch. The key
+   and the provider stay on the PC - the phone only ever picks from the list. */
+async function chModels(){
+  const cur = (CH.info || {}).model || '';
+  openSheet('Model', '<div class="ch-mload"><span class="spin"></span>Looking for models…</div>',
+    '<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>');
+  $('#sheetClose').onclick = closeSheet;
+  let j;
+  try { j = await api('/api/chat/models'); }
+  catch(err){ $('#sheetBody').innerHTML = `<div class="ch-mload bad">${esc(err.message)}</div>`; return; }
+  if (!$('#sheet').classList.contains('show')) return;
+  const ms = j.models || [];
+  $('#sheetBody').innerHTML = `<div class="ch-mprov">${esc((CH.info || {}).providerName || '')}</div>
+    <div class="ch-mlist">${ms.map(m => `<button class="ch-mi${m.id === cur ? ' on' : ''}" data-chpick="${esc(m.id)}">
+      <span class="ch-mt"><b>${esc(chShort(m.id))}</b>${m.id.includes('/') ? `<em>${esc(m.id.split('/')[0])}</em>` : ''}
+      ${m.detail || m.loaded ? `<small>${esc([m.detail, m.loaded ? 'loaded · instant' : ''].filter(Boolean).join(' · '))}</small>` : ''}</span>
+      <i>${m.id === cur ? XI.check : ''}</i></button>`).join('') || '<div class="ch-mload">No models found.</div>'}</div>
+    <div class="ch-mnote">Models and keys are set up in the PC app (Settings › Chatbox).</div>`;
+  $('#sheetBody').querySelectorAll('[data-chpick]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.chpick;
+    if (id === cur){ closeSheet(); return; }
+    b.classList.add('busy');
+    try {
+      const r = await api('/api/chat/model', { model: id });
+      CH.info = Object.assign(CH.info || {}, r);
+      chDraw(); closeSheet();
+      toast('Now using ' + chShort(id));
+    } catch(err){ b.classList.remove('busy'); toast(err.message); }
+  });
 }
 function chBtn(){
   const el = chEl(); if (!el) return;
@@ -4496,6 +4533,7 @@ function chDraw(){
   const el = chEl(); if (!el) return;
   const c = CH.info || {};
   el.querySelector('.ch-model').textContent = c.model || '';
+  el.querySelector('.ch-pm').textContent = chShort(c.model) || 'Pick a model';
   const box = el.querySelector('.ch-msgs');
   if (!CH.msgs.length){
     const on = (c.tools || []).filter(t => t.on).map(t => t.name.toLowerCase());

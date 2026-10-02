@@ -68,7 +68,7 @@ TOOLS = [
 ]
 TOOL_IDS = {t[0] for t in TOOLS}
 SEARCHES = {
-    "duckduckgo": {"name": "DuckDuckGo", "key": False, "keyUrl": ""},
+    "duckduckgo": {"name": "Free (DuckDuckGo, then Bing)", "key": False, "keyUrl": ""},
     "brave": {"name": "Brave Search", "key": True, "keyUrl": "https://api-dashboard.search.brave.com/app/keys"},
     "tavily": {"name": "Tavily", "key": True, "keyUrl": "https://app.tavily.com/home"},
 }
@@ -247,6 +247,57 @@ def list_models(b=None):
     return out[:300]
 
 
+_pm = {"at": 0.0, "key": None, "v": []}
+NOT_CHAT = re.compile(r"embed|whisper|tts|rerank|moderation|dall-e|transcribe", re.I)
+
+
+def phone_models():
+    """The chat models the phone may pick from (a short cache - the picker
+    opens often, the list rarely changes). For Ollama, each says how big it
+    is and whether it's already loaded, i.e. answers instantly."""
+    c = config()
+    key = (c["provider"], _base(c), c["api_key"][-6:])
+    if _pm["key"] != key or time.time() - _pm["at"] > 30:
+        out = [m for m in list_models() if not NOT_CHAT.search(m["id"])]
+        if c["provider"] == "ollama":
+            root = re.sub(r"/v1/?$", "", _base(c))
+            try:
+                with _open(root + "/api/tags", timeout=5) as r:
+                    tags = {m.get("name"): m for m in json.loads(r.read()).get("models", [])}
+                for m in out:
+                    t = tags.get(m["id"]) or {}
+                    d = t.get("details") or {}
+                    bits = [d.get("parameter_size"), ("%.1f GB" % (t["size"] / 1e9)) if t.get("size") else None]
+                    m["detail"] = " · ".join(b for b in bits if b)
+            except Exception:
+                pass
+        _pm.update(at=time.time(), key=key, v=out)
+    out = [dict(m) for m in _pm["v"]]
+    if c["provider"] == "ollama":
+        try:
+            with _open(re.sub(r"/v1/?$", "", _base(c)) + "/api/ps", timeout=3) as r:
+                live = {m.get("name") for m in json.loads(r.read()).get("models", [])}
+            for m in out:
+                m["loaded"] = m["id"] in live
+        except Exception:
+            pass
+    return out
+
+
+def pick_model(mid):
+    """Switch models from the phone - only to one the provider actually has."""
+    mid = str(mid or "").strip()
+    if not any(m["id"] == mid for m in phone_models()):
+        _pm["at"] = 0                              # maybe it was just installed
+        if not any(m["id"] == mid for m in phone_models()):
+            raise ValueError("That model isn't available on this PC's AI service")
+    with _lock:
+        c = config()
+        c["model"] = mid
+        _save(c)
+    return public()
+
+
 # --------------------------------------------------------------- tools
 
 def _private_host(host):
@@ -286,26 +337,82 @@ def web_search(q, c):
             j = json.loads(r.read())
         return [{"title": x.get("title", ""), "url": x.get("url", ""),
                  "snippet": _strip_html(x.get("description", ""))} for x in (j.get("web") or {}).get("results", [])][:8]
-    r = urllib.request.Request("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(q),
-                               headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-    with urllib.request.urlopen(r, timeout=20, context=ssl.create_default_context()) as resp:
-        page = resp.read(2 * 1024 * 1024).decode("utf-8", "replace")
-    if "result__a" not in page and ("anomaly" in page.lower() or "challenge" in page.lower()):
-        # DuckDuckGo turns away automated searches now and then.
-        raise RuntimeError("DuckDuckGo blocked this search. A free Brave Search or Tavily key "
-                           "(PC app > Settings > Chatbox) makes search reliable.")
+    # No key: free search pages, in turn. Any one of them can turn away an
+    # automated search for a while, so a block just moves on to the next.
+    for engine in (_ddg_html, _ddg_lite, _bing_rss):
+        try:
+            out = engine(q)
+        except Exception:
+            out = None
+        if out:
+            return out
+    raise RuntimeError("Web search isn't answering right now (DuckDuckGo and Bing both turned it away). "
+                       "Try again in a minute - or add a free Brave Search or Tavily key in the PC app "
+                       "(Settings > Chatbox) to make search reliable.")
+
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/141.0 Safari/537.36")
+
+
+def _page(url, form=None):
+    r = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode() if form else None,
+                               headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
+                                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
+    with urllib.request.urlopen(r, timeout=15, context=ssl.create_default_context()) as resp:
+        return resp.read(2 * 1024 * 1024).decode("utf-8", "replace")
+
+
+def _unwrap(href):
+    href = html.unescape(href)
+    if "uddg=" in href:
+        href = urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [href])[0])
+    if href.startswith("//"):
+        href = "https:" + href
+    return href
+
+
+def _keep(out, title, href, snippet):
+    if not href.startswith("http") or "duckduckgo.com/y.js" in href or "bing.com/aclick" in href:
+        return                                  # ads
+    if any(o["url"] == href for o in out):
+        return
+    out.append({"title": _strip_html(title), "url": href, "snippet": _strip_html(snippet)[:400]})
+
+
+def _ddg_html(q):
+    page = _page("https://html.duckduckgo.com/html/", {"q": q, "b": ""})
     out = []
     for m in re.finditer(r'(?s)<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="result__a"|$)', page):
-        href = html.unescape(m.group(1))
-        if "uddg=" in href:
-            href = urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [href])[0])
-        if href.startswith("//"):
-            href = "https:" + href
-        if "duckduckgo.com/y.js" in href:      # an ad
-            continue
         sn = re.search(r'(?s)class="result__snippet"[^>]*>(.*?)</a>', m.group(3))
-        out.append({"title": _strip_html(m.group(2)), "url": href,
-                    "snippet": _strip_html(sn.group(1)) if sn else ""})
+        _keep(out, m.group(2), _unwrap(m.group(1)), sn.group(1) if sn else "")
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _ddg_lite(q):
+    page = _page("https://lite.duckduckgo.com/lite/", {"q": q})
+    out = []
+    for m in re.finditer(r"(?s)<a[^>]+href=\"([^\"]+)\"[^>]*class='result-link'[^>]*>(.*?)</a>(.*?)(?=class='result-link'|$)", page):
+        sn = re.search(r"(?s)class='result-snippet'[^>]*>(.*?)</td>", m.group(3))
+        _keep(out, m.group(2), _unwrap(m.group(1)), sn.group(1) if sn else "")
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _bing_rss(q):
+    page = _page("https://www.bing.com/search?format=rss&setlang=en&q=" + urllib.parse.quote(q))
+    out = []
+    for m in re.finditer(r"(?s)<item>(.*?)</item>", page):
+        it = m.group(1)
+        t = re.search(r"(?s)<title>(.*?)</title>", it)
+        u = re.search(r"(?s)<link>(.*?)</link>", it)
+        d = re.search(r"(?s)<description>(.*?)</description>", it)
+        if t and u:
+            _keep(out, html.unescape(t.group(1)), html.unescape(u.group(1)).strip(),
+                  html.unescape(d.group(1)) if d else "")
         if len(out) >= 8:
             break
     return out

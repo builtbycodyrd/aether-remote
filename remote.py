@@ -706,6 +706,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "no such conversation"})
                 return self._send(200, c)
 
+            if path == "/api/chat/models":
+                # The phone's model picker: just names, never keys or addresses.
+                try:
+                    return self._send(200, {"models": chat.phone_models(), "current": chat.config()["model"]})
+                except (ValueError, RuntimeError, OSError) as e:
+                    return self._send(502, {"error": str(e)})
+
             if path == "/api/chat/config":
                 # The key and the setup live on the PC: only the PC app sees them.
                 if not self._is_local():
@@ -1036,6 +1043,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat/clear":
                 chat.clear()
                 return self._send(200, {"ok": True, "convs": []})
+
+            if path == "/api/chat/model":
+                try:
+                    r = chat.pick_model(str(b.get("model", "")))
+                except (ValueError, RuntimeError, OSError) as e:
+                    return self._send(400, {"error": str(e)})
+                log("chat model switched to %s" % r["model"])
+                return self._send(200, r)
 
             if path in ("/api/chat/config", "/api/chat/models", "/api/chat/test"):
                 if not self._is_local():

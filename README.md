@@ -47,7 +47,8 @@ From then on your phone has a grid of tiles you arrange yourself:
   Chatbox): pick Claude, OpenAI, OpenRouter or a local Ollama model, paste a
   key, pick a model, tick what it may do — search the web, check the PC,
   control media and volume, open apps, read your files. Then it's a Chat tab
-  on your phone. The key never leaves the PC.
+  on your phone, with a model picker right in the message box. Web search
+  works with no key at all. The key never leaves the PC.
 - **Notifications you choose.** Downloads finishing, Steam updates, a new
   phone signing in, the GPU running hot… each one Off, Quiet, Normal or
   Important, per phone.
