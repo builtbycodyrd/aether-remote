@@ -37,6 +37,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import memory
 import paths
 
 CONF = paths.data("chat.json")
@@ -65,6 +66,8 @@ TOOLS = [
     ("volume", "Volume", "Change the volume and mute", False),
     ("apps", "Open apps", "Open games and apps from your library", False),
     ("files", "Files", "Search your files by name and read text files (never changes anything)", False),
+    ("memory", "Memory", "Remember what you tell it about you and your setup, and use it in later chats "
+                         "(see or delete any of it from Chat > Memory on your phone)", True),
 ]
 TOOL_IDS = {t[0] for t in TOOLS}
 SEARCHES = {
@@ -131,15 +134,25 @@ def public(local=False):
     out = {"ready": ready(c), "enabled": c["enabled"], "provider": c["provider"],
            "providerName": PROVIDERS.get(c["provider"], {}).get("name", ""),
            "model": c["model"],
-           "tools": [{"id": t[0], "name": t[1], "on": c["tools"][t[0]]} for t in TOOLS]}
+           "tools": [{"id": t[0], "name": t[1], "on": c["tools"][t[0]]} for t in TOOLS],
+           "memory": memory.count()}
     if local:
         k = c["api_key"]
         out.update(base_url=c["base_url"], system=c["system"], defaultSystem=DEFAULT_SYSTEM,
                    hasKey=bool(k), keyHint=("…" + k[-4:]) if len(k) >= 8 else ("set" if k else ""),
                    searchProvider=c["search"]["provider"], hasSearchKey=bool(c["search"]["key"]),
                    searches=SEARCHES,
-                   providers=PROVIDERS, toolList=[{"id": t[0], "name": t[1], "desc": t[2]} for t in TOOLS])
+                   providers=PROVIDERS, toolList=[{"id": t[0], "name": t[1], "desc": t[2]} for t in TOOLS],
+                   memoryCount=memory.count(), memoryVault=memory.VAULT, browser=_browser_status())
     return out
+
+
+def _browser_status():
+    try:
+        import browser
+        return browser.status()
+    except Exception:
+        return {"installed": False, "ready": False}
 
 
 def update(b):
@@ -430,8 +443,48 @@ def read_webpage(url, allowed):
     u = urllib.parse.urlparse(url)
     if u.scheme not in ("http", "https") or not u.hostname or _private_host(u.hostname):
         return {"error": "That address isn't on the public internet."}
-    r = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                                             "Accept": "text/html,text/plain;q=0.9,*/*;q=0.1"})
+    page = _fetch_page(url)
+    # Pages that build themselves with JavaScript (scores, fixtures, shops)
+    # come back nearly empty, or turn plain fetching away: read those in a
+    # real (headless) browser when PinchTab is installed.
+    if _needs_browser(page):
+        try:
+            import browser
+            if browser.status()["ready"]:
+                got = browser.read(url, _private_host)
+                if got.get("error"):
+                    if page.get("error"):
+                        page = got
+                elif page.get("error") or len(got.get("text", "")) > .8 * len(page.get("text", "")):
+                    page = got
+                    page["via"] = "browser"
+        except Exception as e:
+            if page.get("error"):
+                page = {"error": "%s (the browser couldn't open it either: %s)" % (page["error"], str(e)[:120])}
+    page.pop("raw", None)
+    page.pop("scripts", None)
+    if page.get("text") is not None:
+        text = page["text"]
+        page.update(text=text[:12000], truncated=len(text) > 12000)
+    return page
+
+
+def _needs_browser(page):
+    if page.get("error"):
+        return "private" not in page["error"] and "isn't a web page" not in page["error"]
+    t = page.get("text", "")
+    # Little text, or a page that's mostly script: an app that fills itself in
+    # with JavaScript, so what plain fetching saw is only its frame.
+    if len(t) < 4000 or page.get("scripts", 0) > 25 and len(t) < 0.04 * page.get("raw", 1):
+        return True
+    return bool(re.search(r"(?i)enable javascript|requires javascript|javascript is (disabled|required)"
+                                           r"|turn on javascript|please wait while|checking your browser", t[:3000]))
+
+
+def _fetch_page(url):
+    r = urllib.request.Request(url, headers={"User-Agent": UA,
+                                             "Accept": "text/html,text/plain;q=0.9,*/*;q=0.1",
+                                             "Accept-Language": "en-US,en;q=0.9"})
     try:
         with urllib.request.urlopen(r, timeout=20, context=ssl.create_default_context()) as resp:
             # A redirect can't take it somewhere private either.
@@ -446,8 +499,8 @@ def read_webpage(url, allowed):
         return {"error": "Couldn't open it: %s" % e}
     title = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
     text = _strip_html(raw) if "html" in ctype else raw
-    return {"title": _strip_html(title.group(1)) if title else "", "url": url, "text": text[:12000],
-            "truncated": len(text) > 12000}
+    return {"title": _strip_html(title.group(1)) if title else "", "url": url, "text": text,
+            "raw": len(raw), "scripts": len(re.findall(r"(?i)<script", raw))}
 
 
 def tool_defs(c):
@@ -481,6 +534,21 @@ def tool_defs(c):
             ("read_text_file", "Read a text file on the PC (first 256 KB).",
              {"path": {"type": "string"}}, ["path"]),
         ]
+    if t.get("memory"):
+        defs += [
+            ("remember", "Save a lasting fact about the user, their people, projects, devices, setup or "
+             "preferences, to know it in future chats. Only what they said or confirmed - never small talk, "
+             "passwords or private numbers. One short fact per call, in third person (e.g. 'Plays Forza "
+             "Horizon 6 with a MOZA wheel').",
+             {"fact": {"type": "string"},
+              "topics": {"type": "array", "items": {"type": "string"},
+                         "description": "1-3 short topic names to file it under, e.g. Gaming, Music, Work"}},
+             ["fact"]),
+            ("recall", "Look through what you've saved about the user.",
+             {"query": {"type": "string", "description": "words to look for; empty for the newest"}}, []),
+            ("forget", "Delete saved facts about the user that contain this text (when they ask you to forget).",
+             {"match": {"type": "string"}}, ["match"]),
+        ]
     return defs
 
 
@@ -493,6 +561,9 @@ LABELS = {
     "open_app": lambda a: "Opening %s" % str(a.get("name", ""))[:40],
     "search_files": lambda a: "Searching files for “%s”" % str(a.get("query", ""))[:40],
     "read_text_file": lambda a: "Reading %s" % os.path.basename(str(a.get("path", ""))),
+    "remember": lambda a: "Remembering: %s" % str(a.get("fact", ""))[:70],
+    "recall": lambda a: "Checking what it remembers",
+    "forget": lambda a: "Forgetting “%s”" % str(a.get("match", ""))[:40],
 }
 
 
@@ -517,6 +588,14 @@ class Tools:
                 return {"results": res}
             if name == "read_webpage":
                 return read_webpage(args.get("url", ""), self.allowed)
+            if name == "remember":
+                f = memory.remember(args.get("fact", ""), args.get("topics"))
+                return {"saved": f["text"], "topics": f["topics"]}
+            if name == "recall":
+                return {"facts": [{"fact": f["text"], "topics": f["topics"]} for f in memory.recall(args.get("query", ""))]}
+            if name == "forget":
+                gone = memory.forget(match=args.get("match", ""))
+                return {"forgot": gone} if gone else {"error": "Nothing saved matches that."}
             return self.h[name](args)
         except Exception as e:
             return {"error": str(e)[:300]}
@@ -708,6 +787,13 @@ def send(cid, text, hooks, emit):
     msgs.append({"role": "user", "content": text})
     system = (c["system"].strip() or DEFAULT_SYSTEM) + \
         "\nToday is %s." % time.strftime("%A, %B %d, %Y")
+    if c["tools"].get("memory"):
+        known = memory.prompt()
+        system += ("\n\nYou have a memory of this user across chats. When they tell you something lasting about "
+                   "themselves or their setup, save it with the remember tool (briefly mention you did). "
+                   "Don't save small talk or anything secret.")
+        if known:
+            system += "\nWhat you already know about them (use it naturally, don't recite it):\n" + known
     defs = tool_defs(c)
     tools = Tools(c, hooks, text)
     anthropic = c["provider"] == "anthropic"

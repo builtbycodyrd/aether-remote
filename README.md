@@ -48,7 +48,10 @@ From then on your phone has a grid of tiles you arrange yourself:
   key, pick a model, tick what it may do — search the web, check the PC,
   control media and volume, open apps, read your files. Then it's a Chat tab
   on your phone, with a model picker right in the message box. Web search
-  works with no key at all. The key never leaves the PC.
+  works with no key at all; with PinchTab installed it can read pages that
+  need JavaScript too. It remembers what you tell it about yourself - shown
+  on your phone as a map you can prune, and saved as Obsidian-ready notes.
+  The key never leaves the PC.
 - **Notifications you choose.** Downloads finishing, Steam updates, a new
   phone signing in, the GPU running hot… each one Off, Quiet, Normal or
   Important, per phone.

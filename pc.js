@@ -1152,6 +1152,10 @@ async function drawChatCard(){
           `<option value="${k}" ${c.searchProvider === k ? 'selected' : ''}>${esc(v.name)}${v.key ? '' : ' (no key)'}</option>`).join('')}</select></label>
       ${c.searches[c.searchProvider].key ? `<div style="display:flex;gap:8px;margin-top:4px"><input id="ccBraveKey" type="password" placeholder="${c.hasSearchKey ? 'Key saved - paste a new one to replace it' : esc(c.searches[c.searchProvider].name) + ' API key'}" style="flex:1"><button class="btn" id="ccBraveSave">Save</button></div>
         <div class="cc-d"><a href="${esc(c.searches[c.searchProvider].keyUrl)}" target="_blank" rel="noopener">Get a free ${esc(c.searches[c.searchProvider].name)} key ↗</a></div>` : ''}
+      <div class="cc-d"><b>Page reader:</b> ${c.browser && c.browser.ready
+        ? 'full browser (PinchTab) - it can read pages that need JavaScript, like live scores and fixtures. It starts when needed and stops itself when idle.'
+        : 'basic - pages that build themselves with JavaScript come back empty. Install PinchTab (<code>npm install -g pinchtab</code>) and it\'s used automatically.'}</div>
+      ${c.tools.find(x => x.id === 'memory') && c.tools.find(x => x.id === 'memory').on ? `<div class="cc-d"><b>Memory:</b> it remembers ${c.memoryCount} thing${c.memoryCount === 1 ? '' : 's'} about you. See or delete them on your phone (Chat › Memory). They're also saved as notes you can open in Obsidian: <code>${esc(c.memoryVault)}</code></div>` : ''}
       <div class="cc-d">It can never shut down, delete, type, click or run anything. Pages it reads can only come from search results or links you send it, so a web page can't steer it somewhere else.</div>`, true)}
     ${step(needsKey ? 5 : 4, 'Instructions (optional)', `
       <textarea id="ccSystem" rows="3" style="width:100%" placeholder="${esc(c.defaultSystem)}">${esc(c.system)}</textarea>

@@ -14,6 +14,10 @@ jellyfin.json
 # the chat's API key + history, notification keys + phones, the sleep timer
 chat.json
 chat_history.json
+# what the chat remembers about you (and its Obsidian-style notes), the page reader's browser
+chat_memory.json
+chat-memory/
+pinchtab/
 push.json
 notifications.json
 timer.json

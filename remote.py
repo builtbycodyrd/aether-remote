@@ -54,6 +54,7 @@ import timer          # noqa: E402
 import push           # noqa: E402
 import watch          # noqa: E402
 import chat           # noqa: E402
+import memory         # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -706,6 +707,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "no such conversation"})
                 return self._send(200, c)
 
+            if path == "/api/chat/memory":
+                return self._send(200, memory.graph())
+
             if path == "/api/chat/models":
                 # The phone's model picker: just names, never keys or addresses.
                 try:
@@ -1043,6 +1047,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat/clear":
                 chat.clear()
                 return self._send(200, {"ok": True, "convs": []})
+
+            if path == "/api/chat/memory/forget":
+                gone = memory.forget(fid=str(b.get("id", ""))[:20])
+                return self._send(200 if gone else 404, dict(memory.graph(), forgot=gone))
+
+            if path == "/api/chat/memory/clear":
+                memory.clear()
+                log("chat memory cleared")
+                return self._send(200, memory.graph())
 
             if path == "/api/chat/model":
                 try:

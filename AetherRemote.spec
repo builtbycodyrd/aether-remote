@@ -36,7 +36,7 @@ hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
     "update", "wol", "tls", "secondfactor", "webauthn", "media", "files", "games", "jellyfin",
-    "mixer", "timer", "push", "watch", "chat",
+    "mixer", "timer", "push", "watch", "chat", "memory", "browser",
     # Web Push (notifications): encryption + VAPID signing
     "cryptography.hazmat.primitives.ciphers.aead",
     "cryptography.hazmat.primitives.asymmetric.utils",

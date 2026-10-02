@@ -3939,6 +3939,8 @@ const XI = {
   stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  graph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="6" r="1.8"/><circle cx="5.5" cy="18.5" r="1.8"/><circle cx="18.5" cy="18" r="1.8"/><path d="M6.5 7.2l3.6 3M17.5 7.2l-3.6 3M7 17.3l3.2-3.2M17 16.8l-3.1-2.9"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
@@ -4468,6 +4470,7 @@ function chBuild(){
     if (b && b.dataset.ch === 'new'){ if (CH.ctrl) CH.ctrl.abort(); CH.conv = null; CH.msgs = []; chDraw(); ta.focus(); }
     if (b && b.dataset.ch === 'hist') chHistory();
     if (b && b.dataset.ch === 'model') chModels();
+    if (b && b.dataset.ch === 'memory') memOpen();
     const sug = e.target.closest('[data-chsug]');
     if (sug){ chSend(sug.dataset.chsug); }
   });
@@ -4523,10 +4526,14 @@ function chBtn(){
 }
 function chMsgHTML(m, i){
   if (m.role === 'user') return `<div class="ch-m me"><div class="ch-b">${esc(m.text).replace(/\n/g, '<br>')}</div></div>`;
-  const tools = (m.tools || []).map(t => `<div class="ch-tool ${t.ok === undefined ? 'run' : t.ok ? 'ok' : 'bad'}">
-      <i>${t.ok === undefined ? '<span class="spin"></span>' : t.ok ? XI.check : '!'}</i>${esc(t.label)}</div>`).join('');
-  return `<div class="ch-m ai" data-i="${i}">${tools ? `<div class="ch-tools">${tools}</div>` : ''}
-    ${m.text ? `<div class="ch-b md">${md(m.text)}</div>` : m.error ? '' : (m.live ? '<div class="ch-b"><span class="ch-dots"><i></i><i></i><i></i></span></div>' : '')}
+  const all = m.tools || [], running = all.find(t => t.ok === undefined);
+  const tools = all.filter(t => t.ok !== undefined).map(t => `<div class="ch-tool ${t.ok ? 'ok' : 'bad'}">
+      <i>${t.ok ? XI.check : '!'}</i>${esc(t.label)}</div>`).join('');
+  // While it works: the orb, and what it's doing right now.
+  const live = m.live && (running || !m.text)
+    ? `<div class="ch-live"><span class="ch-orbslot"></span><span class="ch-status">${esc(running ? running.label : 'Thinking')}</span></div>` : '';
+  return `<div class="ch-m ai" data-i="${i}">${tools ? `<div class="ch-tools">${tools}</div>` : ''}${live}
+    ${m.text ? `<div class="ch-b md">${md(m.text)}</div>` : ''}
     ${m.error ? `<div class="ch-err">${esc(m.error)}</div>` : ''}</div>`;
 }
 function chDraw(){
@@ -4542,10 +4549,12 @@ function chDraw(){
     if (on.includes('web search')) sugg.push("What's new in tech today?");
     if (on.includes('media')) sugg.push('Skip this song');
     if (on.includes('open apps')) sugg.push('Open Spotify');
-    box.innerHTML = `<div class="ch-empty">${XI.spark}<b>What can I help with?</b>
+    box.innerHTML = `<div class="ch-empty"><span class="ch-heroslot"></span><b>What can I help with?</b>
       <span>${on.length ? 'It can use: ' + esc(on.join(', ')) + '.' : 'Just chat - no tools are switched on.'}</span>
+      ${c.memory ? `<button class="ch-memlink" data-ch="memory">${XI.graph}It remembers ${c.memory} thing${c.memory === 1 ? '' : 's'} about you</button>` : ''}
       <div class="ch-sugs">${sugg.map(s => `<button data-chsug="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
   } else box.innerHTML = CH.msgs.map(chMsgHTML).join('');
+  chOrbMount();
   chBtn();
   const sc = el.querySelector('.ch-scroll');
   sc.scrollTop = sc.scrollHeight;
@@ -4554,7 +4563,7 @@ function chPatchLast(){
   const el = chEl(); if (!el) return;
   const i = CH.msgs.length - 1, node = el.querySelector(`.ch-m.ai[data-i="${i}"]`);
   const html = chMsgHTML(CH.msgs[i], i);
-  if (node) node.outerHTML = html; else chDraw();
+  if (node){ node.outerHTML = html; chOrbMount(); } else chDraw();
   const sc = el.querySelector('.ch-scroll');
   if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) sc.scrollTop = sc.scrollHeight;
 }
@@ -4606,7 +4615,10 @@ async function chHistory(){
   let j;
   try { j = await api('/api/chat'); } catch(err){ toast(err.message); return; }
   const day = ts => new Date(ts * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
-  openSheet('Conversations', `<div style="margin-top:8px">${(j.convs || []).map(c => `
+  const mem = (CH.info || {}).tools && CH.info.tools.find(t => t.id === 'memory' && t.on);
+  openSheet('Conversations', `${mem ? `<button class="ch-memrow" data-chmem>${XI.graph}<span><b>Memory</b>
+      <small>${j.memory ? `${j.memory} thing${j.memory === 1 ? '' : 's'} it knows about you · see the map` : 'Nothing saved yet'}</small></span>${FVI.chev}</button>` : ''}
+    <div style="margin-top:8px">${(j.convs || []).map(c => `
       <div class="srow" style="cursor:pointer" data-chopen="${esc(c.id)}"><div style="flex-grow:1;min-width:0">
         <div class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.title || 'Chat')}</div>
         <div class="d">${day(c.updated)} · ${Math.ceil(c.n / 2)} message${c.n > 2 ? 's' : ''}</div></div>
@@ -4614,6 +4626,8 @@ async function chHistory(){
       || '<div class="srow"><div class="d">No conversations yet.</div></div>'}</div>`,
     `${(j.convs || []).length ? '<button class="btn" id="chClear">Delete all</button>' : ''}<div style="flex-grow:1"></div><button class="btn" id="sheetClose">Done</button>`);
   $('#sheetClose').onclick = closeSheet;
+  const mr = $('#sheetBody').querySelector('[data-chmem]');
+  if (mr) mr.onclick = memOpen;
   const cl = $('#chClear');
   if (cl) cl.onclick = async () => { if (cl.dataset.sure){ await api('/api/chat/clear', {}); CH.conv = null; CH.msgs = []; chDraw(); closeSheet(); } else { cl.dataset.sure = 1; cl.textContent = 'Sure? Tap again'; cl.classList.add('danger'); } };
   $('#sheetBody').querySelectorAll('[data-chdel]').forEach(b => b.onclick = async e => {
@@ -4638,6 +4652,363 @@ async function chLoad(){
     tabs.insertAdjacentHTML('beforeend', `<button data-tab="chat">${XI.spark}<span>Chat</span></button>`);
   }
   if (tabs && !CH.info.ready){ const b = tabs.querySelector('[data-tab=chat]'); if (b) b.remove(); }
+}
+
+/* ================= the particle orb ================= */
+/* A cloud of points on and inside a sphere. Idle, it breathes and turns
+   slowly; while the AI thinks it pulls in tight and spins; while a tool runs
+   it sits in between. Always in the theme's two colours, re-read now and
+   then so a theme change shows up without a reload. */
+function themeRGB(){
+  const cs = getComputedStyle(document.documentElement);
+  const hex = (v, d) => { const m = /^#?([0-9a-f]{6})$/i.exec((v || '').trim()); const n = m ? parseInt(m[1], 16) : d;
+    return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+  return [hex(cs.getPropertyValue('--primary'), 0x7c3aed), hex(cs.getPropertyValue('--secondary'), 0x22d3ee)];
+}
+const ORB_STATES = {
+  idle:  { r: 1,   spin: .16, wob: .045, bright: .8 },
+  think: { r: .64, spin: .95, wob: .12,  bright: 1 },
+  tool:  { r: .8,  spin: .55, wob: .08,  bright: .95 },
+};
+class Orb {
+  constructor(size, n){
+    this.size = size;
+    this.d = Math.min(3, window.devicePixelRatio || 1);
+    this.c = document.createElement('canvas');
+    this.c.className = 'orb-c';
+    this.c.width = this.c.height = Math.round(size * this.d);
+    this.c.style.width = this.c.style.height = size + 'px';
+    this.x = this.c.getContext('2d');
+    this.p = [];
+    const g = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++){
+      const y = 1 - (i / (n - 1)) * 2, rad = Math.sqrt(1 - y * y), th = g * i;
+      this.p.push({ x: Math.cos(th) * rad, y, z: Math.sin(th) * rad,
+        k: .3 + .7 * Math.pow(Math.random(), .4), ph: Math.random() * 6.283, f: .6 + Math.random() * 1.4 });
+    }
+    this.want = ORB_STATES.idle; this.cur = Object.assign({}, this.want);
+    this.energy = 0; this.a = Math.random() * 6; this.t = 0; this.fr = 0; this.raf = 0; this.last = 0;
+    this.col = themeRGB();
+    this.still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+  state(s){
+    const w = ORB_STATES[s] || ORB_STATES.idle;
+    if (w !== this.want){ this.want = w; this.energy = 1; }
+    if (this.still){ this.cur = Object.assign({}, w); this.col = themeRGB(); this.draw(); }
+    else this.run();
+  }
+  run(){ if (!this.raf) this.raf = requestAnimationFrame(ts => this.frame(ts)); }
+  frame(ts){
+    this.raf = 0;
+    if (!this.c.isConnected){ this.last = 0; return; }      // off the page: rest until it's put back
+    const dt = this.last ? Math.min(.05, (ts - this.last) / 1000) : .016;
+    this.last = ts;
+    if (++this.fr % 60 === 0) this.col = themeRGB();
+    for (const k in this.cur) this.cur[k] += (this.want[k] - this.cur[k]) * Math.min(1, dt * 3.2);
+    this.energy *= Math.pow(.2, dt);
+    this.t += dt;
+    this.a += dt * (this.cur.spin + this.energy * 2.4);
+    this.draw();
+    this.run();
+  }
+  draw(){
+    const x = this.x, W = this.c.width, h = W / 2, R = h * .74 * this.cur.r, b = this.cur.bright;
+    const [p1, p2] = this.col;
+    x.globalCompositeOperation = 'source-over';
+    x.clearRect(0, 0, W, W);
+    const g = x.createRadialGradient(h, h, 0, h, h, R * 1.3);
+    g.addColorStop(0, `rgba(${p1},${.38 * b})`);
+    g.addColorStop(.5, `rgba(${p1},${.1 * b})`);
+    g.addColorStop(1, `rgba(${p1},0)`);
+    x.fillStyle = g; x.fillRect(0, 0, W, W);
+    x.globalCompositeOperation = 'lighter';
+    const ca = Math.cos(this.a), sa = Math.sin(this.a);
+    const tilt = .4 + Math.sin(this.t * .3) * .18, ct = Math.cos(tilt), st = Math.sin(tilt);
+    const round = this.size > 40, dot = this.d * (round ? 1.15 : .95), wob = this.cur.wob * 2.2;
+    for (const q of this.p){
+      const w = 1 + Math.sin(this.t * q.f * 1.8 + q.ph) * wob;
+      const px = q.x * q.k * w, py = q.y * q.k * w, pz = q.z * q.k * w;
+      const x1 = px * ca + pz * sa, z0 = -px * sa + pz * ca;
+      const y1 = py * ct - z0 * st, z1 = py * st + z0 * ct;
+      const s = 2.6 / (2.6 + z1), m = (1 - z1) / 2;
+      const r = p1[0] + (p2[0] - p1[0]) * m | 0, gg = p1[1] + (p2[1] - p1[1]) * m | 0, bb = p1[2] + (p2[2] - p1[2]) * m | 0;
+      x.fillStyle = `rgba(${r},${gg},${bb},${(.22 + .62 * m) * b})`;
+      const sz = dot * s * (.7 + .6 * q.k);
+      if (round){ x.beginPath(); x.arc(h + x1 * R * s, h + y1 * R * s, sz * .62, 0, 6.283); x.fill(); }
+      else x.fillRect(h + x1 * R * s - sz / 2, h + y1 * R * s - sz / 2, sz, sz);
+    }
+    x.globalCompositeOperation = 'source-over';
+  }
+}
+/* The chat's live line and the empty screen each borrow one orb; it moves
+   from node to node as the message re-renders, so it never restarts. */
+function chOrbMount(){
+  const el = chEl(); if (!el) return;
+  const slot = el.querySelector('.ch-orbslot');
+  if (slot){
+    if (!CH.orb) CH.orb = new Orb(24, 170);
+    if (CH.orb.c.parentNode !== slot) slot.appendChild(CH.orb.c);
+    const m = CH.msgs[CH.msgs.length - 1];
+    CH.orb.state(m && (m.tools || []).some(t => t.ok === undefined) ? 'tool' : 'think');
+  }
+  const hero = el.querySelector('.ch-heroslot');
+  if (hero){
+    if (!CH.hero) CH.hero = new Orb(104, 720);
+    if (CH.hero.c.parentNode !== hero) hero.appendChild(CH.hero.c);
+    CH.hero.state('idle');
+  }
+}
+
+/* ================= memory: what the chat knows about you ================= */
+/* A graph like Obsidian's: you in the middle, your topics around you, and
+   each saved fact on the topics it's filed under. Drag to pan, pinch to
+   zoom, drag a dot to pull it about, tap one to read or delete it. */
+const MG = { el: null, cv: null, ctx: null, nodes: [], links: [], byId: {}, adj: {}, sel: null,
+  cam: { x: 0, y: 0, k: 1 }, alpha: 0, raf: 0, ptr: new Map(), drag: null, info: null };
+
+function memOpen(){
+  if (!MG.el) memBuild();
+  closeSheet();
+  MG.el.classList.add('show');
+  document.body.classList.add('memOn');
+  memSize();
+  memLoad();
+}
+function memClose(){
+  if (!MG.el) return;
+  MG.el.classList.remove('show');
+  document.body.classList.remove('memOn');
+  cancelAnimationFrame(MG.raf); MG.raf = 0;
+  chLoad().then(() => { const el = chEl(); if (el && el.classList.contains('show')) chDraw(); });
+}
+function memBuild(){
+  const el = document.createElement('div');
+  el.id = 'mem';
+  el.innerHTML = `<div class="mg-head"><button class="fv-back" data-mg="back">${XI.back}<span>Chat</span></button>
+      <div class="mg-title"><b>Memory</b><span class="mg-sub"></span></div><div class="mg-sp"></div></div>
+    <div class="mg-wrap"><canvas></canvas></div>
+    <div class="mg-card"></div>`;
+  document.body.appendChild(el);
+  MG.el = el; MG.cv = el.querySelector('canvas'); MG.ctx = MG.cv.getContext('2d');
+  el.querySelector('[data-mg=back]').onclick = memClose;
+  window.addEventListener('resize', () => { if (el.classList.contains('show')){ memSize(); memKick(.05); } });
+  const cv = MG.cv;
+  cv.addEventListener('pointerdown', e => {
+    cv.setPointerCapture(e.pointerId);
+    MG.ptr.set(e.pointerId, { x: e.offsetX, y: e.offsetY, x0: e.offsetX, y0: e.offsetY, t: Date.now() });
+    if (MG.ptr.size === 1){
+      const n = memHit(e.offsetX, e.offsetY);
+      MG.drag = n && n.id !== 'you' ? n : null;
+      if (MG.drag){ MG.drag.fx = MG.drag.x; MG.drag.fy = MG.drag.y; memKick(.3); }
+    } else MG.drag = null;
+  });
+  cv.addEventListener('pointermove', e => {
+    const p = MG.ptr.get(e.pointerId); if (!p) return;
+    const dx = e.offsetX - p.x, dy = e.offsetY - p.y;
+    if (MG.ptr.size === 2){
+      const [a, b] = [...MG.ptr.values()];
+      const d0 = Math.hypot(a.x - b.x, a.y - b.y);
+      p.x = e.offsetX; p.y = e.offsetY;
+      const d1 = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d0 > 0) memZoom(d1 / d0, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      return;
+    }
+    p.x = e.offsetX; p.y = e.offsetY;
+    if (MG.drag){
+      const w = memWorld(e.offsetX, e.offsetY);
+      MG.drag.fx = w.x; MG.drag.fy = w.y; memKick(.3);
+    } else { MG.cam.x += dx; MG.cam.y += dy; memPaint(); }
+  });
+  const up = e => {
+    const p = MG.ptr.get(e.pointerId);
+    MG.ptr.delete(e.pointerId);
+    if (!p) return;
+    const moved = Math.hypot(p.x - p.x0, p.y - p.y0);
+    if (MG.drag){ delete MG.drag.fx; delete MG.drag.fy; }
+    if (moved < 7 && Date.now() - p.t < 450 && MG.ptr.size === 0){
+      const n = memHit(p.x0, p.y0);
+      MG.sel = n && n.id !== 'you' ? n.id : null;
+      memCard(); memPaint();
+    }
+    MG.drag = null;
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  cv.addEventListener('wheel', e => { e.preventDefault(); memZoom(Math.exp(-e.deltaY / 400), e.offsetX, e.offsetY); }, { passive: false });
+  el.querySelector('.mg-card').addEventListener('click', async e => {
+    const b = e.target.closest('[data-mgf], [data-mgsel], [data-mgclear]');
+    if (!b) return;
+    if (b.dataset.mgsel){ MG.sel = b.dataset.mgsel; memCard(); memPaint(); return; }
+    if (b.dataset.mgclear !== undefined){
+      if (!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Sure? Tap again'; b.classList.add('danger'); return; }
+      try { memSet(await api('/api/chat/memory/clear', {})); toast('Memory cleared'); } catch(err){ toast(err.message); }
+      return;
+    }
+    b.disabled = true;
+    try {
+      const j = await api('/api/chat/memory/forget', { id: b.dataset.mgf });
+      if (MG.sel === 'f:' + b.dataset.mgf) MG.sel = null;
+      memSet(j); toast('Forgotten');
+    } catch(err){ b.disabled = false; toast(err.message); }
+  });
+}
+function memSize(){
+  const w = MG.cv.parentNode.clientWidth, h = MG.cv.parentNode.clientHeight, d = Math.min(3, window.devicePixelRatio || 1);
+  MG.cv.width = Math.round(w * d); MG.cv.height = Math.round(h * d);
+  MG.cv.style.width = w + 'px'; MG.cv.style.height = h + 'px';
+  MG.dpr = d; MG.w = w; MG.h = h;
+  if (!MG.placed){ MG.cam = { x: w / 2, y: h * .42, k: 1 }; MG.placed = true; }
+}
+async function memLoad(){
+  MG.el.querySelector('.mg-sub').textContent = 'Loading…';
+  try { memSet(await api('/api/chat/memory')); }
+  catch(err){ MG.el.querySelector('.mg-sub').textContent = err.message; }
+}
+function memSet(j){
+  MG.info = j;
+  const old = MG.byId, nodes = j.nodes.map(n => Object.assign({}, n));
+  MG.byId = {}; nodes.forEach(n => MG.byId[n.id] = n);
+  MG.adj = {}; nodes.forEach(n => MG.adj[n.id] = new Set());
+  const links = j.links.filter(l => MG.byId[l.s] && MG.byId[l.t]);
+  links.forEach(l => { MG.adj[l.s].add(l.t); MG.adj[l.t].add(l.s); });
+  for (const n of nodes){
+    const o = old[n.id];
+    n.r = n.kind === 'you' ? 17 : n.kind === 'topic' ? 7 + Math.min(9, Math.sqrt(n.n) * 2.4) : 4;
+    if (o){ n.x = o.x; n.y = o.y; n.vx = o.vx; n.vy = o.vy; continue; }
+    if (n.kind === 'you'){ n.x = n.y = 0; }
+    else {
+      const near = [...MG.adj[n.id]].map(k => old[k] || MG.byId[k]).find(m => m && m.x !== undefined);
+      const a = Math.random() * 6.283, d = n.kind === 'topic' ? 120 : 40;
+      n.x = (near ? near.x : 0) + Math.cos(a) * d; n.y = (near ? near.y : 0) + Math.sin(a) * d;
+    }
+    n.vx = n.vy = 0;
+  }
+  MG.nodes = nodes; MG.links = links;
+  if (MG.sel && !MG.byId[MG.sel]) MG.sel = null;
+  const fresh = Object.keys(old).length === 0;
+  MG.alpha = fresh ? 1 : .5;
+  if (fresh) for (let i = 0; i < 160; i++) memTick();      // settle before the first frame
+  MG.el.querySelector('.mg-sub').textContent = j.count ? `${j.count} thing${j.count === 1 ? '' : 's'} · ${j.topics} topic${j.topics === 1 ? '' : 's'}` : 'Nothing yet';
+  memCard();
+  memKick(MG.alpha);
+}
+function memKick(a){ MG.alpha = Math.max(MG.alpha, a); if (!MG.raf) MG.raf = requestAnimationFrame(memFrame); }
+function memFrame(){
+  MG.raf = 0;
+  if (!MG.el.classList.contains('show')) return;
+  memTick(); memPaint();
+  if (MG.alpha > .004 || MG.drag) MG.raf = requestAnimationFrame(memFrame);
+}
+function memTick(){
+  const N = MG.nodes, a = MG.alpha;
+  for (let i = 0; i < N.length; i++){
+    const p = N[i];
+    for (let j = i + 1; j < N.length; j++){
+      const q = N[j];
+      let dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy;
+      if (d2 < 1){ dx = Math.random() - .5; dy = Math.random() - .5; d2 = 1; }
+      if (d2 > 90000) continue;
+      const f = (p.kind === 'fact' && q.kind === 'fact' ? 520 : 1500) * a / d2, d = Math.sqrt(d2);
+      p.vx -= dx / d * f; p.vy -= dy / d * f; q.vx += dx / d * f; q.vy += dy / d * f;
+    }
+  }
+  for (const l of MG.links){
+    const s = MG.byId[l.s], t = MG.byId[l.t];
+    const want = s.kind === 'you' || t.kind === 'you' ? 125 : 52;
+    const dx = t.x - s.x, dy = t.y - s.y, d = Math.max(1, Math.hypot(dx, dy));
+    const f = (d - want) / d * .08 * a;
+    s.vx += dx * f; s.vy += dy * f; t.vx -= dx * f; t.vy -= dy * f;
+  }
+  for (const n of N){
+    if (n.kind === 'you'){ n.x = n.y = n.vx = n.vy = 0; continue; }
+    if (n.fx !== undefined){ n.x = n.fx; n.y = n.fy; n.vx = n.vy = 0; continue; }
+    n.vx = (n.vx - n.x * .004 * a) * .78; n.vy = (n.vy - n.y * .004 * a) * .78;
+    n.x += n.vx; n.y += n.vy;
+  }
+  MG.alpha += (0 - MG.alpha) * .02;
+}
+function memWorld(sx, sy){ return { x: (sx - MG.cam.x) / MG.cam.k, y: (sy - MG.cam.y) / MG.cam.k }; }
+function memZoom(f, sx, sy){
+  const k = Math.max(.35, Math.min(4, MG.cam.k * f)); f = k / MG.cam.k;
+  MG.cam.x = sx - (sx - MG.cam.x) * f; MG.cam.y = sy - (sy - MG.cam.y) * f; MG.cam.k = k;
+  memPaint();
+}
+function memHit(sx, sy){
+  const w = memWorld(sx, sy);
+  let best = null, bd = 1e9;
+  for (const n of MG.nodes){
+    const d = Math.hypot(n.x - w.x, n.y - w.y) - n.r;
+    if (d < bd){ bd = d; best = n; }
+  }
+  return bd * MG.cam.k < 14 ? best : null;
+}
+function memPaint(){
+  const x = MG.ctx, d = MG.dpr || 1, [p1, p2] = themeRGB(), k = MG.cam.k;
+  const sel = MG.sel, near = sel ? MG.adj[sel] : null;
+  const lit = n => !sel || n.id === sel || near.has(n.id);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.clearRect(0, 0, MG.cv.width, MG.cv.height);
+  x.setTransform(d * k, 0, 0, d * k, d * MG.cam.x, d * MG.cam.y);
+  x.lineWidth = 1 / k;
+  for (const l of MG.links){
+    const s = MG.byId[l.s], t = MG.byId[l.t], on = sel && (l.s === sel || l.t === sel);
+    x.strokeStyle = on ? `rgba(${p2},.85)` : `rgba(${p1},${sel ? .1 : .32})`;
+    x.lineWidth = (on ? 1.6 : 1) / k;
+    x.beginPath(); x.moveTo(s.x, s.y); x.lineTo(t.x, t.y); x.stroke();
+  }
+  for (const n of MG.nodes){
+    const on = lit(n);
+    x.globalAlpha = on ? 1 : .22;
+    if (n.kind === 'you'){
+      const g = x.createRadialGradient(n.x - 5, n.y - 6, 2, n.x, n.y, n.r * 2.2);
+      g.addColorStop(0, `rgb(${p2})`); g.addColorStop(.42, `rgb(${p1})`); g.addColorStop(.5, `rgba(${p1},.35)`); g.addColorStop(1, `rgba(${p1},0)`);
+      x.fillStyle = g; x.beginPath(); x.arc(n.x, n.y, n.r * 2.2, 0, 6.283); x.fill();
+    } else {
+      if (n.id === sel){ x.fillStyle = `rgba(${p2},.25)`; x.beginPath(); x.arc(n.x, n.y, n.r + 6, 0, 6.283); x.fill(); }
+      x.fillStyle = n.kind === 'topic' ? `rgb(${p1})` : `rgba(${p2},.9)`;
+      x.beginPath(); x.arc(n.x, n.y, n.r, 0, 6.283); x.fill();
+      if (n.kind === 'topic'){ x.strokeStyle = `rgba(${p2},.7)`; x.lineWidth = 1.2 / k; x.stroke(); }
+    }
+  }
+  x.globalAlpha = 1;
+  // Labels in screen pixels, so they stay readable at any zoom.
+  x.setTransform(d, 0, 0, d, 0, 0);
+  x.textAlign = 'center'; x.textBaseline = 'top';
+  for (const n of MG.nodes){
+    const show = n.kind !== 'fact' || k > 1.7 || n.id === sel || (sel && near.has(n.id));
+    if (!show) continue;
+    const sx = MG.cam.x + n.x * k, sy = MG.cam.y + (n.y + (n.kind === 'you' ? n.r * 1.4 : n.r)) * k + 4;
+    if (sx < -80 || sx > MG.w + 80 || sy < -20 || sy > MG.h + 20) continue;
+    const t = n.kind === 'fact' && n.label.length > 34 ? n.label.slice(0, 32) + '…' : n.label;
+    x.font = (n.kind === 'fact' ? '500 11px ' : '600 12.5px ') + 'Sora, system-ui, sans-serif';
+    x.globalAlpha = lit(n) ? 1 : .3;
+    x.fillStyle = n.kind === 'fact' ? 'rgba(226,232,240,.8)' : '#f1f0f7';
+    x.lineWidth = 3; x.lineJoin = 'round'; x.strokeStyle = 'rgba(0,0,0,.55)';
+    x.strokeText(t, sx, sy); x.fillText(t, sx, sy);
+  }
+  x.globalAlpha = 1;
+}
+function memCard(){
+  const box = MG.el.querySelector('.mg-card'), j = MG.info || { count: 0 };
+  const n = MG.sel && MG.byId[MG.sel];
+  const day = ts => new Date(ts * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  const factRow = f => `<div class="mg-fact"><span>${esc(f.label)}</span><button class="mg-x" data-mgf="${esc(f.fid)}" aria-label="Forget">${XI.trash}</button></div>`;
+  if (!n){
+    box.innerHTML = j.count
+      ? `<div class="mg-h">What it knows</div><div class="mg-d">${j.count} thing${j.count === 1 ? '' : 's'} it learned from your chats, in ${j.topics} topic${j.topics === 1 ? '' : 's'}. Tap a dot to read it, or delete anything you'd rather it forgot.</div>
+         <div class="mg-chips">${MG.nodes.filter(m => m.kind === 'topic').sort((a, b) => b.n - a.n).map(t => `<button data-mgsel="${esc(t.id)}">${esc(t.label)} <i>${t.n}</i></button>`).join('')}</div>
+         <button class="btn" data-mgclear>Forget everything</button>`
+      : `<div class="mg-h">Nothing yet</div><div class="mg-d">Tell the chat about yourself - the games you play, your setup, people and plans - and it'll remember, and show up here.</div>`;
+    return;
+  }
+  if (n.kind === 'topic'){
+    const fs = [...MG.adj[n.id]].map(k => MG.byId[k]).filter(m => m.kind === 'fact');
+    box.innerHTML = `<div class="mg-h">${esc(n.label)} <i>${fs.length}</i></div><div class="mg-list">${fs.map(factRow).join('')}</div>`;
+  } else {
+    box.innerHTML = `<div class="mg-h small">Saved ${day(n.ts)}</div><div class="mg-big">${esc(n.label)}</div>
+      <div class="mg-chips">${n.topics.map(t => `<button data-mgsel="${esc('t:' + t.toLowerCase())}">${esc(t)}</button>`).join('')}</div>
+      <button class="btn danger" data-mgf="${esc(n.fid)}">Forget this</button>`;
+  }
 }
 
 /* ================= boot ================= */
