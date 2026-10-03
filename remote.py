@@ -554,9 +554,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html, "text/html; charset=utf-8")
 
         if not self._authed():
-            if path == "/":
+            # A page opened in a browser (the phone app, or the PC app from
+            # the tray) goes to the sign-in page and comes back after; only
+            # the app's own data calls get the bare 401.
+            if path in ("/", "/pc") or (not path.startswith("/api/")
+                                        and "text/html" in (self.headers.get("Accept") or "")):
                 return self._send(302, b"", "text/html",
-                                  {"Location": "/login"})
+                                  {"Location": "/login" + ("" if path == "/" else "?next=" + quote(path))})
             return self._send(401, {"error": "not logged in"})
 
         if path == "/api/sf/status":
