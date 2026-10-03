@@ -96,6 +96,67 @@ def library_index():
 def known_launches():
     return {i["id"]: i["launch"] for i in library_items()}
 
+
+def _procs(image):
+    """How many processes with this image name are running."""
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq %s" % image, "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        return sum(1 for line in out.splitlines() if line.lower().startswith('"%s"' % image.lower()))
+    except Exception:
+        return 0
+
+
+def _steam_unstick():
+    """Steam sometimes hangs after updating itself: steam.exe is running but
+    its window (steamwebhelper) never comes up, and it ignores every launch.
+    Give it a moment, then restart it. True when it had to be restarted."""
+    if not _procs("steam.exe"):
+        return False                      # not running: steam:// starts it
+    for _ in range(10):
+        if _procs("steamwebhelper.exe"):
+            return False
+        time.sleep(2)
+    root = library.steam_root()
+    if not root:
+        return False
+    log("Steam looked stuck (no window after updating) - restarting it")
+    subprocess.run(["taskkill", "/IM", "steam.exe", "/F"], capture_output=True, timeout=15,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    time.sleep(3)
+    sysctl.run_detached('cmd /c start "" "%s"' % os.path.join(root, "steam.exe"))
+    for _ in range(30):
+        time.sleep(2)
+        if _procs("steamwebhelper.exe"):
+            time.sleep(6)                 # let it finish signing in
+            break
+    return True
+
+
+def _steam_started(appid, since, wait):
+    """Did Steam report the game running after `since`? Steam writes that to
+    its content log ("AppID 123 state changed : ...,App Running")."""
+    root = library.steam_root()
+    if not root:
+        return True
+    p = os.path.join(root, "logs", "content_log.txt")
+    pat = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] AppID %s state changed : .*App Running" % re.escape(appid))
+    end = time.time() + wait
+    while time.time() < end:
+        try:
+            with open(p, "rb") as f:
+                f.seek(max(0, os.path.getsize(p) - 65536))
+                tail = f.read().decode("utf-8", "replace").splitlines()
+            for line in reversed(tail):
+                m = pat.match(line)
+                if m and time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) >= since - 3:
+                    return True
+        except OSError:
+            pass
+        time.sleep(1.5)
+    return False
+
 # seed(), not data(): a fresh install copies config.default.json in on first
 # run, and an update never overwrites one the user has edited.
 CONFIG_PATH = paths.seed("config.json")
@@ -1508,15 +1569,17 @@ class Handler(BaseHTTPRequestHandler):
             if self._protected_steps(actions) and \
                     self._stepup("tile:" + str(b.get("id", "")), b):
                 return
-            if actions:
-                def _pre():
+            def _go():
+                if actions:
                     self._run_steps(actions, "launch %s" % ref)
-                    sysctl.run_detached(launch_cmd)
-                threading.Thread(target=_pre, daemon=True).start()
-                log("launch %s (%d pre-actions)" % (ref, len(actions)))
-            else:
+                if ref.startswith("steam-"):
+                    _steam_unstick()      # a Steam hung after updating ignores launches
                 sysctl.run_detached(launch_cmd)
-                log("launch %s" % ref)
+            if actions or ref.startswith("steam-"):
+                threading.Thread(target=_go, daemon=True).start()
+            else:
+                _go()
+            log("launch %s%s" % (ref, " (%d pre-actions)" % len(actions) if actions else ""))
             return self._send(200, {"ok": True})
 
         if kind == "action":
@@ -2254,9 +2317,22 @@ class Handler(BaseHTTPRequestHandler):
             if not best:
                 return {"error": "Nothing called that in the library",
                         "some_library_items": [i["name"] for i in items][:40]}
+            steam = re.match(r"steam-(\d+)$", best["id"])
+            restarted = _steam_unstick() if steam else False
+            t0 = time.time()
             sysctl.run_detached(self._launch_cmd(known_launches()[best["id"]]))
             log("chat opened %s" % best["id"])
-            return {"ok": True, "opened": best["name"]}
+            if not steam:
+                return {"ok": True, "opened": best["name"]}
+            # Don't just say "opened": watch Steam actually start it.
+            if _steam_started(steam.group(1), t0, 75 if restarted else 45):
+                out = {"ok": True, "opened": best["name"], "running": True}
+                if restarted:
+                    out["note"] = "Steam was stuck, so it was restarted first"
+                return out
+            return {"ok": False, "opened": best["name"], "running": False,
+                    "error": "Steam was asked to start it but it still isn't running - Steam may be "
+                             "updating the game or showing a message on the PC's screen."}
 
         def search_files(a):
             folder = a.get("folder") or os.path.expanduser("~")
