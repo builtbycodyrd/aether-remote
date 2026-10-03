@@ -791,6 +791,7 @@ def send(cid, text, hooks, emit):
         known = memory.prompt()
         system += ("\n\nYou have a memory of this user across chats. When they tell you something lasting about "
                    "themselves or their setup, save it with the remember tool (briefly mention you did). "
+                   "Never say you saved or noted something unless you called the remember tool. "
                    "Don't save small talk or anything secret.")
         if known:
             system += "\nWhat you already know about them (use it naturally, don't recite it):\n" + known
@@ -821,9 +822,62 @@ def send(cid, text, hooks, emit):
         if part and not part.endswith(("\n", " ")):
             reply += "\n\n"
             emit({"t": "text", "d": "\n\n"})
+    # Small local models often *say* "noted!" without calling the tool. So
+    # after the answer, a short second look at what the user said picks out
+    # anything lasting and saves it - shown in the chat like any tool.
+    if c["tools"].get("memory") and not any(u["name"] == "remember" for u in used) and _personal(text):
+        try:
+            for f in extract_facts(c, text)[:4]:
+                try:
+                    saved = memory.remember(f["fact"], f.get("topics"))
+                except ValueError:
+                    continue
+                label = "Remembered: %s" % saved["text"][:70]
+                emit({"t": "tool", "name": "remember", "label": label})
+                emit({"t": "tool_done", "ok": True})
+                used.append({"name": "remember", "label": label, "ok": True})
+        except Exception:
+            pass
     _store(cid, text, reply.strip(), used)
     emit({"t": "done", "conv": cid})
     return cid
+
+
+_PERSONAL = re.compile(r"(?i)\b(i|i'?m|i'?ve|i'?d|i'?ll|my|mine|me|remember|call me)\b")
+
+
+def _personal(text):
+    return len(text) >= 8 and bool(_PERSONAL.search(text))
+
+
+EXTRACT = ("You keep a long-term memory about one user. Read what the user just wrote and pick out facts "
+           "about the user that will still matter in future conversations: their name, work, studies, "
+           "people in their life, projects, games and hobbies, devices and setup, preferences, plans. "
+           "Ignore requests and questions themselves, small talk, moods, and anything secret (passwords, "
+           "keys, account or card numbers). Don't repeat facts already known. Write each fact short and in "
+           "third person, e.g. \"Name is Cody\" or \"Works as an engineer\". Reply with JSON only, no other "
+           "text: [{\"fact\": \"...\", \"topics\": [\"1-2 short topic names\"]}] - or [] if there is nothing.")
+
+
+def extract_facts(c, text):
+    known = memory.prompt(limit=40, chars=1800)
+    msg = ("Already known:\n%s\n\nThe user wrote:\n%s" % (known or "(nothing yet)", text[:2000]))
+    turn = _anthropic_turn if c["provider"] == "anthropic" else _openai_turn
+    out, _, _ = turn(dict(c, tools={}), EXTRACT, [{"role": "user", "content": msg}], [], lambda e: None)
+    m = re.search(r"\[.*\]", out, re.S)
+    if not m:
+        return []
+    try:
+        items = json.loads(m.group(0))
+    except ValueError:
+        return []
+    facts = []
+    for it in items if isinstance(items, list) else []:
+        if isinstance(it, dict) and isinstance(it.get("fact"), str) and it["fact"].strip():
+            facts.append({"fact": it["fact"].strip(), "topics": it.get("topics") if isinstance(it.get("topics"), list) else None})
+        elif isinstance(it, str) and it.strip():
+            facts.append({"fact": it.strip(), "topics": None})
+    return facts
 
 
 def test():
