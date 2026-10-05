@@ -710,6 +710,22 @@
   .ch-send svg{width:19px;height:19px}
   .ch-send:disabled{opacity:.35}
   .ch-send.busy{background:var(--surf2)}
+  /* "needs your OK" (Face ID / PIN) and screenshots in the chat */
+  .ch-ask{max-width:94%;margin:2px 0 8px;padding:12px 14px;border-radius:calc(var(--r) + 4px);
+    border:1px solid color-mix(in srgb,var(--accent2) 55%,transparent);background:color-mix(in srgb,var(--primary) 14%,var(--surf))}
+  .ch-ask-h{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--accent2)}
+  .ch-ask-h svg{width:15px;height:15px}
+  .ch-ask-w{font-size:15px;font-weight:600;margin:6px 0 2px}
+  .ch-ask-b{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;min-height:20px;align-items:center}
+  .ch-ask-b button{border:1px solid var(--line2);background:var(--surf);color:var(--text);border-radius:999px;padding:8px 16px;
+    font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+  .ch-ask-b button.pri{border:0;color:#fff;background:linear-gradient(140deg,var(--primary),var(--secondary))}
+  .ch-ask.ok{border-color:color-mix(in srgb,var(--good) 50%,transparent)}
+  .ch-ask.ok .ch-ask-h{color:var(--good)}
+  .ch-ask.no{opacity:.65;border-color:var(--hair)}
+  .ch-ask.no .ch-ask-h{color:var(--muted)}
+  .ch-img{display:block;max-width:94%;margin:2px 0 8px;border-radius:calc(var(--r) + 2px);overflow:hidden;border:1px solid var(--hair)}
+  .ch-img img{display:block;width:100%;height:auto}
   /* the live line: the orb and what it's doing */
   .ch-live{display:flex;align-items:center;gap:9px;min-height:30px;margin:2px 0 4px}
   .ch-orbslot{width:24px;height:24px;flex-shrink:0;display:flex}

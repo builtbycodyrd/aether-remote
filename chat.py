@@ -66,6 +66,9 @@ TOOLS = [
     ("volume", "Volume", "Change the volume and mute", False),
     ("apps", "Open apps", "Open games and apps from your library", False),
     ("files", "Files", "Search your files by name and read text files (never changes anything)", False),
+    ("control", "PC control", "Lock the PC, switch the audio output, set an app's volume, bring a window to the front "
+                              "and take screenshots. Closing apps, sleep, restart, shut down and sign out always "
+                              "ask for your Face ID or PIN on the phone first", False),
     ("memory", "Memory", "Remember what you tell it about you and your setup, and use it in later chats "
                          "(see or delete any of it from Chat > Memory on your phone)", True),
 ]
@@ -544,6 +547,20 @@ def tool_defs(c):
             ("read_text_file", "Read a text file on the PC (first 256 KB).",
              {"path": {"type": "string"}}, ["path"]),
         ]
+    if t.get("control"):
+        defs += [
+            ("lock_pc", "Lock the PC (Windows lock screen).", {}, []),
+            ("screenshot", "Take a screenshot of the PC's main screen and show it to the user in the chat.", {}, []),
+            ("switch_audio_output", "Switch the PC's sound to another output device (speakers, headset...).",
+             {"name": {"type": "string", "description": "part of the device's name"}}, ["name"]),
+            ("set_app_volume", "Set one app's volume (0-100) in the PC's volume mixer.",
+             {"app": {"type": "string"}, "level": {"type": "integer", "minimum": 0, "maximum": 100}}, ["app", "level"]),
+            ("focus_window", "Bring an open window to the front.", {"name": {"type": "string"}}, ["name"]),
+            ("close_app", "Close an open app (like pressing its X). The user must approve with Face ID or PIN.",
+             {"name": {"type": "string"}}, ["name"]),
+            ("power", "Sleep, restart, shut down or sign out of the PC. The user must approve with Face ID or PIN.",
+             {"action": {"type": "string", "enum": ["sleep", "restart", "shutdown", "sign_out"]}}, ["action"]),
+        ]
     if t.get("memory"):
         defs += [
             ("remember", "Save a lasting fact about the user, their people, projects, devices, setup or "
@@ -574,10 +591,22 @@ LABELS = {
     "open_app": lambda a: "Opening %s" % str(a.get("name", ""))[:40],
     "search_files": lambda a: "Searching files for “%s”" % str(a.get("query", ""))[:40],
     "read_text_file": lambda a: "Reading %s" % os.path.basename(str(a.get("path", ""))),
+    "lock_pc": lambda a: "Locking the PC",
+    "screenshot": lambda a: "Taking a screenshot",
+    "switch_audio_output": lambda a: "Switching sound to %s" % str(a.get("name", ""))[:40],
+    "set_app_volume": lambda a: "Setting %s to %s%%" % (str(a.get("app", ""))[:30], a.get("level", "?")),
+    "focus_window": lambda a: "Bringing up %s" % str(a.get("name", ""))[:40],
+    "close_app": lambda a: "Closing %s" % str(a.get("name", ""))[:40],
+    "power": lambda a: {"sleep": "Putting the PC to sleep", "restart": "Restarting the PC", "shutdown": "Shutting down the PC",
+                        "sign_out": "Signing out"}.get(a.get("action"), "Power"),
     "remember": lambda a: "Remembering: %s" % str(a.get("fact", ""))[:70],
     "recall": lambda a: "Checking what it remembers",
     "forget": lambda a: "Forgetting “%s”" % str(a.get("match", ""))[:40],
 }
+
+
+PROTECTED = {"close_app", "power"}
+WITH_EMIT = {"screenshot"}
 
 
 class Tools:
@@ -588,6 +617,7 @@ class Tools:
         self.c, self.h = c, hooks
         self.allowed = {_norm_url(u) for u in re.findall(r"https?://[^\s<>\"')\]]+", user_text or "")}
         self.names = {d[0] for d in tool_defs(c)}
+        self.emit = lambda ev: None
 
     def run(self, name, args):
         if name not in self.names:
@@ -609,6 +639,12 @@ class Tools:
             if name == "forget":
                 gone = memory.forget(match=args.get("match", ""))
                 return {"forgot": gone} if gone else {"error": "Nothing saved matches that."}
+            if name in PROTECTED:
+                # Anything that could lose work or turn the PC off waits for
+                # the user's Face ID / PIN on the phone - see remote._confirm.
+                return self.h[name](args, lambda what: self.h["_confirm"](self.emit, what))
+            if name in WITH_EMIT:
+                return self.h[name](args, self.emit)
             return self.h[name](args)
         except Exception as e:
             return {"error": str(e)[:300]}
@@ -810,6 +846,7 @@ def send(cid, text, hooks, emit):
             system += "\nWhat you already know about them (use it naturally, don't recite it):\n" + known
     defs = tool_defs(c)
     tools = Tools(c, hooks, text)
+    tools.emit = emit
     anthropic = c["provider"] == "anthropic"
     reply, used = "", []
     for rnd in range(MAX_ROUNDS + 1):

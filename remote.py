@@ -12,6 +12,7 @@
 
 import argparse
 import io
+import secrets
 import json
 import mimetypes
 import os
@@ -95,6 +96,12 @@ def library_index():
 
 def known_launches():
     return {i["id"]: i["launch"] for i in library_items()}
+
+
+# The chat's "needs your OK" requests waiting on the phone, and the last few
+# screenshots it took (shown in the chat, fetched with the session).
+_CONFIRMS = {}
+_SHOTS = {}
 
 
 def _procs(image):
@@ -775,6 +782,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat/memory":
                 return self._send(200, memory.graph())
 
+            if path == "/api/chat/shot":
+                img = _SHOTS.get(qs.get("id", [""])[0])
+                if not img:
+                    return self._send(404, {"error": "that screenshot is gone"})
+                return self._send(200, img, "image/jpeg")
+
             if path == "/api/chat/models":
                 # The phone's model picker: just names, never keys or addresses.
                 try:
@@ -1112,6 +1125,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat/clear":
                 chat.clear()
                 return self._send(200, {"ok": True, "convs": []})
+
+            if path == "/api/chat/confirm":
+                # Approving needs Face ID / PIN for exactly this request
+                # (the phone's api() asks for it when we answer "stepup").
+                c = _CONFIRMS.get(str(b.get("id", "")))
+                if not c:
+                    return self._send(404, {"error": "That request has expired"})
+                if b.get("approve"):
+                    if self._stepup(c["scope"], b):
+                        return
+                    c["ok"] = True
+                    log("chat action approved: %s" % c["what"])
+                c["ev"].set()
+                return self._send(200, {"ok": True, "approved": c["ok"]})
 
             if path == "/api/chat/memory/forget":
                 gone = memory.forget(fid=str(b.get("id", ""))[:20])
@@ -2334,6 +2361,105 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "Steam was asked to start it but it still isn't running - Steam may be "
                              "updating the game or showing a message on the PC's screen."}
 
+        def _norm(x):
+            return re.sub(r"[^a-z0-9]", "", str(x or "").lower())
+
+        def _windows_like(name):
+            want = _norm(name)
+            if not want:
+                return []
+            return [w for w in sysctl.running_windows()
+                    if want in _norm(w["title"]) or want in _norm(w["process"].rsplit(".", 1)[0])]
+
+        def _confirm(emit, what):
+            """Show "needs your OK" in the chat and wait for Face ID / PIN."""
+            cid = secrets.token_hex(6)
+            c = _CONFIRMS[cid] = {"ev": threading.Event(), "ok": False, "scope": "chat:" + cid, "what": what}
+            emit({"t": "confirm", "id": cid, "what": what})
+            c["ev"].wait(120)
+            _CONFIRMS.pop(cid, None)
+            emit({"t": "confirm_done", "id": cid, "ok": c["ok"]})
+            return c["ok"]
+
+        def lock_pc(a):
+            sysctl.lock_workstation()
+            log("chat locked the PC")
+            return {"ok": True}
+
+        def screenshot(a, emit):
+            from PIL import ImageGrab
+            img = ImageGrab.grab(all_screens=False).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+            sid = secrets.token_hex(8)
+            _SHOTS[sid] = buf.getvalue()
+            for k in list(_SHOTS)[:-4]:
+                _SHOTS.pop(k, None)
+            emit({"t": "image", "url": "/api/chat/shot?id=" + sid})
+            log("chat took a screenshot")
+            return {"ok": True, "shown_to_user": True, "size": "%dx%d" % img.size}
+
+        def switch_audio_output(a):
+            devs = sysctl.devices()["devices"]
+            want = _norm(a.get("name"))
+            hit = [d for d in devs if want and want in _norm(d["name"])]
+            if len(hit) != 1:
+                return {"error": "Say which one" if hit else "No output called that",
+                        "outputs": [d["name"] for d in devs]}
+            sysctl.set_default_device(hit[0]["id"])
+            log("chat switched audio output")
+            return {"ok": True, "now": hit[0]["name"]}
+
+        def set_app_volume(a):
+            want = _norm(a.get("app"))
+            apps = mixer.apps()
+            hit = [m for m in apps if want and (want in _norm(m["name"]) or want in _norm(m["app"]))]
+            if not hit:
+                return {"error": "That app isn't playing sound right now", "apps_with_sound": [m["name"] for m in apps]}
+            lvl = max(0, min(100, int(a.get("level", 50))))
+            mixer.set_app(hit[0]["app"], pct=lvl)
+            return {"ok": True, "app": hit[0]["name"], "volume": lvl}
+
+        def focus_window(a):
+            wins = _windows_like(a.get("name"))
+            if not wins:
+                return {"error": "No open window like that", "open": [w["title"] for w in sysctl.running_windows()][:25]}
+            return dict(sysctl.focus_window(wins[0]["hwnd"]), window=wins[0]["title"])
+
+        def close_app(a, confirm):
+            wins = _windows_like(a.get("name"))
+            if not wins:
+                return {"error": "No open app like that", "open": [w["title"] for w in sysctl.running_windows()][:25]}
+            if len(wins) > 3:
+                return {"error": "That matches several apps - which one?", "matches": [w["title"] for w in wins]}
+            names = ", ".join(w["title"][:50] for w in wins)
+            if not confirm("Close " + names):
+                return {"error": "The user didn't approve it, so nothing was closed."}
+            for w in wins:
+                sysctl.close_window(w["hwnd"])
+            time.sleep(2.5)
+            left = [w["title"] for w in wins if sysctl.window_alive(w["hwnd"])]
+            log("chat closed %s (approved on the phone)" % names)
+            out = {"ok": True, "closed": [w["title"] for w in wins if w["title"] not in left]}
+            if left:
+                out["still_open"] = left
+                out["note"] = "Still open - it may be asking to save something on the PC."
+            return out
+
+        def power(a, confirm):
+            act = {"sign_out": "signout"}.get(a.get("action"), a.get("action"))
+            what = {"sleep": "Put the PC to sleep", "restart": "Restart the PC", "shutdown": "Shut down the PC",
+                    "signout": "Sign out of Windows"}.get(act)
+            if not what:
+                return {"error": "Unknown power action"}
+            if not confirm(what):
+                return {"error": "The user didn't approve it, so nothing happened."}
+            cmd = self.POWER[act]
+            # A few seconds' grace so the chat can still say so.
+            threading.Timer(6, lambda: sysctl.run_detached(cmd)).start()
+            log("chat: %s in 6s (approved on the phone)" % act)
+            return {"ok": True, "doing": what, "in_seconds": 6}
+
         def list_library(a):
             q = re.sub(r"[^a-z0-9 ]", "", str(a.get("search") or "").lower()).split()
             items = [{"name": i["name"], "from": i["id"].split("-")[0]} for i in library_items()
@@ -2358,7 +2484,10 @@ class Handler(BaseHTTPRequestHandler):
         return {"pc_status": pc_status, "media_control": media_control, "set_volume": set_volume,
                 "open_app": open_app, "search_files": search_files, "read_text_file": read_text_file,
                 "pc_specs": lambda a: sysctl.hardware_specs(), "running_programs": lambda a: sysctl.top_processes(),
-                "list_library": list_library}
+                "list_library": list_library, "_confirm": _confirm, "lock_pc": lock_pc,
+                "screenshot": screenshot, "switch_audio_output": switch_audio_output,
+                "set_app_volume": set_app_volume, "focus_window": focus_window,
+                "close_app": close_app, "power": power}
 
     def _shot(self):
         try:

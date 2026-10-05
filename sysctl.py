@@ -816,6 +816,16 @@ def focus_window(hwnd):
     return {"ok": ok}
 
 
+def close_window(hwnd):
+    """Ask a window to close, exactly like clicking its X - the app can still
+    ask to save first. Nothing is force-killed."""
+    user32.PostMessageW(int(hwnd), 0x0010, 0, 0)         # WM_CLOSE
+
+
+def window_alive(hwnd):
+    return bool(user32.IsWindow(int(hwnd)) and user32.IsWindowVisible(int(hwnd)))
+
+
 def window_exe(hwnd):
     pid = wt.DWORD()
     user32.GetWindowThreadProcessId(int(hwnd), byref(pid))

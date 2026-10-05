@@ -3941,6 +3941,7 @@ const XI = {
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
   graph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="6" r="1.8"/><circle cx="5.5" cy="18.5" r="1.8"/><circle cx="18.5" cy="18" r="1.8"/><path d="M6.5 7.2l3.6 3M17.5 7.2l-3.6 3M7 17.3l3.2-3.2M17 16.8l-3.1-2.9"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
@@ -4534,10 +4535,23 @@ function chBuild(){
     if (b){ if (Date.now() - (+b.dataset.fired || 0) > 600) chAct(b); return; }
     const sug = e.target.closest('[data-chsug]');
     if (sug){ chSend(sug.dataset.chsug); return; }
+    const ok = e.target.closest('[data-chok]'), no = e.target.closest('[data-chno]');
+    if (ok || no){ chConfirm((ok || no).dataset[ok ? 'chok' : 'chno'], !!ok); return; }
     if (!e.target.closest('.ch-pop')) chPopClose();
   });
   el.querySelector('.ch-dbody').addEventListener('click', chDrawerClick);
   return el;
+}
+async function chConfirm(id, approve){
+  const m = CH.msgs[CH.msgs.length - 1], c = m && (m.confirms || []).find(x => x.id === id);
+  if (!c || c.state !== 'ask') return;
+  c.state = approve ? 'wait' : 'no'; chPatchLast();
+  try { await api('/api/chat/confirm', { id, approve }); }
+  catch(err){
+    // Face ID / PIN cancelled, or it expired: it doesn't happen.
+    c.state = 'no'; chPatchLast();
+    try { await api('/api/chat/confirm', { id, approve: false }); } catch(e){}
+  }
 }
 function chAct(b){
   const a = b.dataset.ch, ta = chEl().querySelector('textarea');
@@ -4656,7 +4670,15 @@ function chMsgHTML(m, i){
   // While it works: the orb, and what it's doing right now.
   const live = m.live && (running || !m.text)
     ? `<div class="ch-live"><span class="ch-orbslot"></span><span class="ch-status">${esc(running ? running.label : 'Thinking')}</span></div>` : '';
-  return `<div class="ch-m ai" data-i="${i}">${tools ? `<div class="ch-tools">${tools}</div>` : ''}${live}
+  // "Needs your OK": what it wants to do, approved only with Face ID / PIN.
+  const asks = (m.confirms || []).map(c => `<div class="ch-ask ${c.state}">
+      <div class="ch-ask-h">${XI.lock}<span>${c.state === 'ask' || c.state === 'wait' ? 'Needs your OK' : c.state === 'ok' ? 'Approved' : 'Not approved'}</span></div>
+      <div class="ch-ask-w">${esc(c.what)}</div>
+      ${c.state === 'ask' ? `<div class="ch-ask-b"><button data-chno="${esc(c.id)}">Don't</button>
+        <button class="pri" data-chok="${esc(c.id)}">Approve</button></div>`
+        : c.state === 'wait' ? '<div class="ch-ask-b"><span class="spin"></span></div>' : ''}</div>`).join('');
+  const imgs = (m.images || []).map(u => `<a class="ch-img" href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Screenshot"></a>`).join('');
+  return `<div class="ch-m ai" data-i="${i}">${tools ? `<div class="ch-tools">${tools}</div>` : ''}${asks}${imgs}${live}
     ${m.text ? `<div class="ch-b md">${md(m.text)}</div>` : ''}
     ${m.error ? `<div class="ch-err">${esc(m.error)}</div>` : ''}</div>`;
 }
@@ -4722,6 +4744,9 @@ async function chSend(text){
         else if (ev.t === 'tool') ai.tools.push({ label: ev.label });
         else if (ev.t === 'tool_done'){ const t = ai.tools[ai.tools.length - 1]; if (t) t.ok = ev.ok; }
         else if (ev.t === 'error') ai.error = ev.d;
+        else if (ev.t === 'confirm') (ai.confirms = ai.confirms || []).push({ id: ev.id, what: ev.what, state: 'ask' });
+        else if (ev.t === 'confirm_done'){ const c = (ai.confirms || []).find(x => x.id === ev.id); if (c) c.state = ev.ok ? 'ok' : 'no'; }
+        else if (ev.t === 'image') (ai.images = ai.images || []).push(ev.url);
         paint();
       }
     }
