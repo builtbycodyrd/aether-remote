@@ -61,7 +61,7 @@ PROVIDERS = {
 TOOLS = [
     # id, name, what it lets the AI do, on by default
     ("web", "Web search", "Search the web and read pages from the results", True),
-    ("pc", "PC status", "See CPU/GPU/RAM, the volume, what's playing and what's open", True),
+    ("pc", "PC status", "See the exact hardware, CPU/GPU/RAM use, what's running, the volume, what's playing and what's open", True),
     ("media", "Media", "Play/pause, skip and jump back or forward", False),
     ("volume", "Volume", "Change the volume and mute", False),
     ("apps", "Open apps", "Open games and apps from your library", False),
@@ -514,8 +514,15 @@ def tool_defs(c):
              {"url": {"type": "string"}}, ["url"]),
         ]
     if t["pc"]:
-        defs.append(("pc_status", "The PC's current state: CPU/GPU/RAM/disk, volume, what's playing, the game running, open windows.",
-                     {}, []))
+        defs += [
+            ("pc_status", "The PC's current state: CPU/GPU/RAM/disk usage and temperature, volume, what's playing, "
+             "the game running, open windows.", {}, []),
+            ("pc_specs", "The PC's exact hardware: CPU model, graphics card (with its maker and VRAM), each RAM stick "
+             "(size, brand, speed), motherboard and BIOS, every drive (model, size, type, health) and how full each "
+             "is, every monitor (name, resolution, refresh rate, main/portrait), network adapter, Windows edition.",
+             {}, []),
+            ("running_programs", "What's running on the PC right now and what's using the most CPU and memory.", {}, []),
+        ]
     if t["media"]:
         defs.append(("media_control", "Control what's playing on the PC.",
                      {"action": {"type": "string", "enum": ["play_pause", "next", "previous", "forward", "back"]},
@@ -525,8 +532,11 @@ def tool_defs(c):
                      {"level": {"type": "integer", "minimum": 0, "maximum": 100},
                       "mute": {"type": "boolean"}}, []))
     if t["apps"]:
-        defs.append(("open_app", "Open a game or app from the user's library by name.",
-                     {"name": {"type": "string"}}, ["name"]))
+        defs += [
+            ("open_app", "Open a game or app from the user's library by name.", {"name": {"type": "string"}}, ["name"]),
+            ("list_library", "List the games and apps installed in the user's library (Steam, Epic, other launchers, apps).",
+             {"search": {"type": "string", "description": "optional words to filter by"}}, []),
+        ]
     if t["files"]:
         defs += [
             ("search_files", "Find files on the PC by name (searches the user's folders).",
@@ -556,6 +566,9 @@ LABELS = {
     "web_search": lambda a: "Searching the web for “%s”" % str(a.get("query", ""))[:60],
     "read_webpage": lambda a: "Reading %s" % (urllib.parse.urlparse(str(a.get("url", ""))).netloc or "a page"),
     "pc_status": lambda a: "Checking the PC",
+    "pc_specs": lambda a: "Reading the PC's hardware",
+    "running_programs": lambda a: "Seeing what's running",
+    "list_library": lambda a: "Looking through your games and apps",
     "media_control": lambda a: "Media: %s" % str(a.get("action", "")).replace("_", " "),
     "set_volume": lambda a: "Setting the volume" if a.get("level") is not None else "Muting" if a.get("mute") else "Unmuting",
     "open_app": lambda a: "Opening %s" % str(a.get("name", ""))[:40],

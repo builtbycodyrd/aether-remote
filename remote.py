@@ -2334,6 +2334,12 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "Steam was asked to start it but it still isn't running - Steam may be "
                              "updating the game or showing a message on the PC's screen."}
 
+        def list_library(a):
+            q = re.sub(r"[^a-z0-9 ]", "", str(a.get("search") or "").lower()).split()
+            items = [{"name": i["name"], "from": i["id"].split("-")[0]} for i in library_items()
+                     if all(w in i["name"].lower() for w in q)]
+            return {"count": len(items), "items": items[:150]}
+
         def search_files(a):
             folder = a.get("folder") or os.path.expanduser("~")
             r = files.search(str(folder), str(a.get("query", ""))[:100], limit=40, budget=4)
@@ -2350,7 +2356,9 @@ class Handler(BaseHTTPRequestHandler):
             return {"text": t["text"][:40000], "truncated": t["truncated"] or len(t["text"]) > 40000}
 
         return {"pc_status": pc_status, "media_control": media_control, "set_volume": set_volume,
-                "open_app": open_app, "search_files": search_files, "read_text_file": read_text_file}
+                "open_app": open_app, "search_files": search_files, "read_text_file": read_text_file,
+                "pc_specs": lambda a: sysctl.hardware_specs(), "running_programs": lambda a: sysctl.top_processes(),
+                "list_library": list_library}
 
     def _shot(self):
         try:
@@ -2548,6 +2556,7 @@ def main():
     timer.configure(run=_timer_fire, notify=push.notify_async)
     watch.configure(game=media.current_game, stats=sysctl.system_stats,
                     update=lambda: update.state())
+    sysctl.warm_specs()           # the chat's "what's in my PC" answer, ready before it's asked
 
     host = resolve_host(a.host)
 

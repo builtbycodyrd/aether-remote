@@ -13,6 +13,7 @@ import json
 import math
 import os
 import queue
+import re
 import threading
 import subprocess
 import time
@@ -923,3 +924,167 @@ class VolumeKeeper:
 
 
 keeper = VolumeKeeper()
+
+
+# ---------------------------------------------------------------- full specs
+# What the chat answers "what exactly is in my PC?" from: the exact parts,
+# read from Windows itself (WMI) plus nvidia-smi and the display settings.
+# It's a few seconds of PowerShell, so it's cached and warmed at start-up.
+
+_SPECS_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$o = [ordered]@{}
+$c = Get-CimInstance Win32_Processor | Select-Object -First 1
+$o.cpu = [ordered]@{ name = $c.Name.Trim(); cores = $c.NumberOfCores; threads = $c.NumberOfLogicalProcessors; base_mhz = $c.MaxClockSpeed }
+$o.gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -like 'PCI*' } | ForEach-Object {
+  [ordered]@{ name = $_.Name; driver = $_.DriverVersion; pnp = $_.PNPDeviceID } })
+$o.ram = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+  [ordered]@{ slot = $_.DeviceLocator; gb = [math]::Round($_.Capacity / 1GB); maker = $_.Manufacturer;
+              part = ($_.PartNumber -as [string]).Trim(); rated_mhz = $_.Speed; running_mhz = $_.ConfiguredClockSpeed } })
+$b = Get-CimInstance Win32_BaseBoard; $bi = Get-CimInstance Win32_BIOS
+$o.motherboard = [ordered]@{ maker = $b.Manufacturer; model = $b.Product; bios = $bi.SMBIOSBIOSVersion }
+$os = Get-CimInstance Win32_OperatingSystem
+$o.windows = [ordered]@{ edition = $os.Caption; build = $os.BuildNumber;
+                         uptime_hours = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1); pc_name = $env:COMPUTERNAME }
+$o.drives = @(Get-PhysicalDisk | ForEach-Object {
+  [ordered]@{ model = $_.FriendlyName; size_gb = [math]::Round($_.Size / 1GB); type = "$($_.MediaType)"; bus = "$($_.BusType)"; health = "$($_.HealthStatus)" } })
+$o.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object {
+  [ordered]@{ drive = "$($_.DriveLetter):"; label = $_.FileSystemLabel; size_gb = [math]::Round($_.Size / 1GB); free_gb = [math]::Round($_.SizeRemaining / 1GB) } })
+$o.monitor_ids = @(Get-CimInstance -Namespace root\wmi WmiMonitorID | ForEach-Object {
+  [ordered]@{ id = $_.InstanceName; name = -join ($_.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) } })
+$o.network = @(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | ForEach-Object {
+  [ordered]@{ name = $_.Name; adapter = $_.InterfaceDescription; link_speed = "$($_.LinkSpeed)" } })
+$o | ConvertTo-Json -Depth 4 -Compress
+"""
+
+# PCI subsystem vendor -> who made the card (an "RTX 3060" is NVIDIA's chip,
+# the board around it is MSI's, EVGA's, PNY's...)
+_GPU_MAKERS = {"1462": "MSI", "3842": "EVGA", "1043": "ASUS", "1458": "Gigabyte", "19DA": "Zotac",
+               "196E": "PNY", "10DE": "NVIDIA (Founders Edition)", "1569": "Palit", "1B4C": "KFA2/Galax",
+               "7377": "Colorful", "174B": "Sapphire", "1DA2": "Sapphire", "1682": "XFX", "1849": "ASRock",
+               "148C": "PowerColor", "1043 ": "ASUS", "1028": "Dell", "103C": "HP", "17AA": "Lenovo",
+               "1D05": "Tongfang", "1558": "Clevo", "8086": "Intel", "1002": "AMD", "1B0A": "Gainward",
+               "10B0": "Gainward", "1D17": "Inno3D", "1DB4": "Inno3D"}
+_specs = {"at": 0.0, "v": None}
+_specs_lock = threading.Lock()
+
+
+class _DISPLAY_DEVICEW(Structure):
+    _fields_ = [("cb", wt.DWORD), ("DeviceName", ctypes.c_wchar * 32), ("DeviceString", ctypes.c_wchar * 128),
+                ("StateFlags", wt.DWORD), ("DeviceID", ctypes.c_wchar * 128), ("DeviceKey", ctypes.c_wchar * 128)]
+
+
+class _DEVMODEW(Structure):
+    _fields_ = [("dmDeviceName", ctypes.c_wchar * 32), ("dmSpecVersion", wt.WORD), ("dmDriverVersion", wt.WORD),
+                ("dmSize", wt.WORD), ("dmDriverExtra", wt.WORD), ("dmFields", wt.DWORD),
+                ("dmPositionX", wt.LONG), ("dmPositionY", wt.LONG), ("dmDisplayOrientation", wt.DWORD),
+                ("dmDisplayFixedOutput", wt.DWORD), ("dmColor", ctypes.c_short), ("dmDuplex", ctypes.c_short),
+                ("dmYResolution", ctypes.c_short), ("dmTTOption", ctypes.c_short), ("dmCollate", ctypes.c_short),
+                ("dmFormName", ctypes.c_wchar * 32), ("dmLogPixels", wt.WORD), ("dmBitsPerPel", wt.DWORD),
+                ("dmPelsWidth", wt.DWORD), ("dmPelsHeight", wt.DWORD), ("dmDisplayFlags", wt.DWORD),
+                ("dmDisplayFrequency", wt.DWORD), ("dmICMMethod", wt.DWORD), ("dmICMIntent", wt.DWORD),
+                ("dmMediaType", wt.DWORD), ("dmDitherType", wt.DWORD), ("dmReserved1", wt.DWORD),
+                ("dmReserved2", wt.DWORD), ("dmPanningWidth", wt.DWORD), ("dmPanningHeight", wt.DWORD)]
+
+
+def _displays(wmi_names):
+    """Every active screen: its monitor's real name, resolution, refresh rate,
+    position and whether it's the main one or turned to portrait."""
+    out = []
+    i = 0
+    while True:
+        dd = _DISPLAY_DEVICEW(); dd.cb = ctypes.sizeof(dd)
+        if not user32.EnumDisplayDevicesW(None, i, byref(dd), 0):
+            break
+        i += 1
+        if not dd.StateFlags & 0x1:                   # not attached to the desktop
+            continue
+        dm = _DEVMODEW(); dm.dmSize = ctypes.sizeof(dm)
+        if not user32.EnumDisplaySettingsW(dd.DeviceName, -1, byref(dm)):
+            continue
+        mon = _DISPLAY_DEVICEW(); mon.cb = ctypes.sizeof(mon)
+        name = ""
+        if user32.EnumDisplayDevicesW(dd.DeviceName, 0, byref(mon), 0):
+            hw = (mon.DeviceID.split("\\") + ["", ""])[1].upper()       # MONITOR\GSM5B7F\{...} -> GSM5B7F
+            name = next((n["name"] for n in wmi_names if hw and hw in (n.get("id") or "").upper()), "") \
+                or mon.DeviceString
+        out.append({"monitor": name or "Display", "resolution": "%dx%d" % (dm.dmPelsWidth, dm.dmPelsHeight),
+                    "refresh_hz": dm.dmDisplayFrequency, "main": bool(dd.StateFlags & 0x4),
+                    "portrait": dm.dmPelsHeight > dm.dmPelsWidth, "gpu": dd.DeviceString})
+    out.sort(key=lambda d: not d["main"])
+    return out
+
+
+def hardware_specs(max_age=900):
+    with _specs_lock:
+        if _specs["v"] and time.time() - _specs["at"] < max_age:
+            return _specs["v"]
+        enc = base64.b64encode(_SPECS_PS.encode("utf-16-le")).decode()
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                           capture_output=True, text=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        j = json.loads(r.stdout[r.stdout.index("{"):])
+        smi = {}
+        try:
+            q = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
+                                "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            for line in q.strip().splitlines():
+                n, mem, drv = [x.strip() for x in line.split(",")]
+                smi[n] = {"vram_gb": round(int(mem) / 1024), "nvidia_driver": drv}
+        except Exception:
+            pass
+        for g in j.get("gpus") or []:
+            sub = re.search(r"SUBSYS_([0-9A-F]{4})([0-9A-F]{4})", g.pop("pnp", "") or "", re.I)
+            maker = _GPU_MAKERS.get(sub.group(2).upper()) if sub else None
+            if maker:
+                g["card_maker"] = maker
+            g.update(smi.get(g["name"], {}))
+        for m in j.get("ram") or []:
+            if m.get("part") and re.fullmatch(r"(?i)ddr\d \d+", m["part"]):
+                m["sold_as"] = m.pop("part")              # a generic "DDR4 3200", not a real part number
+        j["displays"] = _displays(j.pop("monitor_ids", None) or [])
+        j["ram_total_gb"] = sum(m.get("gb") or 0 for m in j.get("ram") or [])
+        _specs.update(at=time.time(), v=j)
+        return j
+
+
+def warm_specs():
+    threading.Thread(target=lambda: _safe_call(hardware_specs), daemon=True, name="specs").start()
+
+
+def _safe_call(fn):
+    try:
+        fn()
+    except Exception:
+        pass
+
+
+_TOP_PS = r"""
+$a = @{}; Get-Process | ForEach-Object { $a[$_.Id] = $_.TotalProcessorTime.TotalMilliseconds }
+Start-Sleep -Milliseconds 1000
+$n = [Environment]::ProcessorCount
+Get-Process | ForEach-Object {
+  $p = $_; $prev = $a[$p.Id]
+  $cpu = if ($prev -ne $null) { ($p.TotalProcessorTime.TotalMilliseconds - $prev) / 10 / $n } else { 0 }
+  [pscustomobject]@{ name = $p.ProcessName; title = $p.MainWindowTitle; cpu = [math]::Round($cpu, 1); ram_mb = [math]::Round($p.WorkingSet64 / 1MB) }
+} | Group-Object name | ForEach-Object {
+  [pscustomobject]@{ name = $_.Name; count = $_.Count; cpu_pct = [math]::Round(($_.Group | Measure-Object cpu -Sum).Sum, 1);
+                     ram_mb = ($_.Group | Measure-Object ram_mb -Sum).Sum;
+                     window = (($_.Group | Where-Object title | Select-Object -First 1).title) }
+} | ConvertTo-Json -Compress
+"""
+
+
+def top_processes(n=12):
+    """What's using the CPU and memory right now, grouped by program."""
+    enc = base64.b64encode(_TOP_PS.encode("utf-16-le")).decode()
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                       capture_output=True, text=True, timeout=40,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    rows = json.loads(r.stdout[r.stdout.index("["):])
+    rows = [x for x in rows if x["name"] not in ("Idle", "System", "Memory Compression", "Registry")]
+    by_cpu = sorted(rows, key=lambda x: -x["cpu_pct"])[:n]
+    by_ram = sorted(rows, key=lambda x: -x["ram_mb"])[:n]
+    return {"top_cpu": by_cpu, "top_memory": by_ram,
+            "note": "cpu_pct is share of the whole CPU over one second"}
