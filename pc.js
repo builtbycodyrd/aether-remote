@@ -625,6 +625,7 @@ function viewSettings(){
     <div class="sub">The chat, network and appearance. Appearance is shared with the phone.</div>
 
     <div class="card" id="chatCard"><h3>Chatbox</h3><div class="muted">Loading…</div></div>
+    <div class="card" id="kilnCard"><h3>Chatbox › Add-ons › Kiln</h3><div class="muted">Loading…</div></div>
 
     <div class="card">
       <h3>Discord buttons</h3>
@@ -901,6 +902,7 @@ function viewSettings(){
     } catch(err){ toast(err.message); e.target.checked = !e.target.checked; }
   });
   drawChatCard();
+  drawKilnCard();
 }
 
 /* ======================= UPDATES =======================
@@ -1215,6 +1217,137 @@ async function loadModels(){
       `<option value="${esc(m.id)}" ${m.id === CHC.model ? 'selected' : ''}>${esc(m.name)}${m.name !== m.id ? ' - ' + esc(m.id) : ''}</option>`).join('');
   } catch(e){
     sel.innerHTML = `<option value="${esc(CHC.model || '')}">${esc(CHC.model || 'Couldn\'t load')}</option>`;
+    toast(e.message);
+  }
+}
+
+
+/* ================= Chatbox › Add-ons › Kiln (Aether Forge) =================
+ * Kiln is a coding agent the phone talks to from the chat. It builds in its
+ * own sandbox on this PC (a private Linux with Docker, all in one folder),
+ * with its own model - a bigger one does much better at coding. */
+let KC = null, kcPoll = 0;
+
+async function drawKilnCard(){
+  const box = $('#kilnCard');
+  if (!box) return;
+  try { KC = await api('/api/kiln/config'); }
+  catch(e){ box.innerHTML = '<h3>Chatbox › Add-ons › Kiln</h3><div class="muted">' + esc(e.message) + '</div>'; return; }
+  const c = KC, P = c.providers[c.provider] || {}, sb = c.sandbox || {};
+  const step = (n, title, body, done) => `<div class="cc-step ${done ? 'done' : ''}">
+      <div class="cc-n">${done ? '✓' : n}</div><div class="cc-b"><div class="cc-t">${title}</div>${body}</div></div>`;
+  const steps = sb.steps || [], at = steps.indexOf(sb.step);
+  const STEPN = { wsl: 'Checking WSL', download: 'Downloading Linux', import: 'Creating the sandbox', docker: 'Installing Docker',
+    start: 'Starting Docker', image: 'Building the workshop (a few minutes)', done: 'Ready' };
+  const wslMissing = sb.error && /WSL isn't installed/.test(sb.error);
+  const sandboxBody = sb.busy
+    ? `<div class="kc-steps">${steps.filter(k => k !== 'done').map((k, i) => `<div class="kc-s ${i < at ? 'ok' : i === at ? 'now' : ''}">
+        <i>${i < at ? '✓' : i === at ? '<span class="spin"></span>' : ''}</i>${esc(STEPN[k] || k)}</div>`).join('')}</div>
+       <div class="cc-d">You can leave this page - it carries on.</div>`
+    : sb.installed
+      ? `<div class="kc-stat"><span class="kc-dot ${sb.running ? 'on' : ''}"></span>${sb.running ? 'Running' : 'Ready - starts when Kiln needs it'}
+          ${sb.sizeGB != null ? `<span class="muted"> · ${sb.sizeGB} GB on disk</span>` : ''}</div>
+        <div class="cc-d">Everything lives in one folder: <code>${esc(sb.root)}</code></div>
+        <div class="kc-btns">${sb.running ? '<button class="btn" id="kcStop">Stop it now</button>' : ''}
+          <button class="btn danger" id="kcRemove">Remove Forge</button></div>
+        <div class="cc-d">Stops on its own after 20 minutes unused. "Remove Forge" deletes the sandbox and every project in it.</div>`
+      : `<div class="cc-d" style="margin-top:0">A private Linux (WSL) with Docker inside, just for Kiln - no Docker Desktop, no admin.
+          Each project gets its own container that can reach the internet but never this PC, your network or your other devices.
+          About 1 GB, all in <code>${esc(sb.root)}</code>.</div>
+        ${sb.error ? `<div class="cc-d" style="color:var(--bad)">${esc(sb.error)}</div>` : ''}
+        <div class="kc-btns">${wslMissing ? '<button class="btn pri" id="kcWsl">Install WSL</button>' : ''}
+          <button class="btn ${wslMissing ? '' : 'pri'}" id="kcInstall">${sb.error ? 'Try again' : 'Set up the sandbox'}</button></div>
+        ${wslMissing ? '<div class="cc-d">Installing WSL asks for an admin OK and usually a restart. Then come back and press Set up.</div>' : ''}`;
+  box.innerHTML = `
+    <h3><span class="kc-ember"></span>Chatbox › Add-ons › Kiln</h3>
+    <div class="muted" style="font-size:12.5px;line-height:1.6;margin-bottom:6px">
+      <b>Aether Forge</b>: a coding agent you talk to from the phone (Chat › Kiln). It builds web pages, scripts and tools
+      in its own sandbox - writes the code, runs it, fixes it - and shows you the result on your phone.</div>
+    ${step(1, 'The sandbox', sandboxBody, sb.installed && !sb.busy)}
+    ${step(2, 'Coding model', `
+      <select id="kcProv">${Object.entries(c.providers).map(([k, p]) =>
+        `<option value="${k}" ${k === c.provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      ${c.provider === 'custom' || c.provider === 'ollama' ? `<input id="kcBase" placeholder="${esc(P.base || 'https://…/v1')}" value="${esc(c.base_url)}" style="margin-top:8px;width:100%">` : ''}
+      ${P.key ? `<div style="display:flex;gap:8px;margin-top:8px"><input id="kcKey" type="password" placeholder="${c.hasKey ? 'Saved (' + esc(c.keyHint) + ') - paste a new one to replace it' : 'API key'}" style="flex:1" autocomplete="off">
+        <button class="btn" id="kcKeySave">Save key</button></div>
+        <div class="cc-d"><a href="${esc(P.keyUrl)}" target="_blank" rel="noopener">Get a key from ${esc(P.name)} ↗</a> - separate from the Chatbox's, so you can use a stronger model just for coding.</div>` : ''}
+      <div style="display:flex;gap:8px;margin-top:8px"><select id="kcModel" style="flex:1">${c.model ? `<option value="${esc(c.model)}" selected>${esc(c.model)}</option>` : '<option value="">Load the list →</option>'}</select>
+        <button class="btn" id="kcLoad">Load models</button></div>
+      <div class="cc-d">Coding is the hardest thing you can ask a model. Local models are fine for pages, scripts and small tools;
+        for bigger builds a Claude model (Anthropic) does far better. The key never goes inside the sandbox.</div>`,
+      !!c.model && (c.hasKey || !P.key))}
+    ${step(3, 'Learning', `
+      <label class="row"><div class="t">Learn from each build<div class="d">After a build that took real work, Kiln writes down how it did it -
+        and fixes the note when it hits a new snag - then reads it before similar builds. It also knows what the Chatbox remembers about you.
+        ${c.skillCount ? `It has learned ${c.skillCount} so far` : 'Nothing learned yet'} - see or delete them on your phone (Kiln › Projects › Skills).
+        They're plain notes in <code>${esc(c.skillsDir)}</code>.</div></div>
+        <input type="checkbox" id="kcLearn" ${c.learn ? 'checked' : ''}></label>`, true)}
+    ${step(4, 'Saving to this PC', `
+      <input id="kcExport" value="${esc(c.exportDir)}" style="width:100%">
+      <div class="cc-d">"Save to PC" on the phone copies a project here. It always asks for your Face ID or PIN - so does deleting a project.</div>`, true)}
+    ${step(5, 'Instructions (optional)', `
+      <textarea id="kcSystem" rows="3" style="width:100%" placeholder="Leave empty for Kiln's own instructions">${esc(c.system)}</textarea>`, true)}
+    <div class="cc-end">
+      <button class="btn" id="kcTest">Test the model</button>
+      <span class="muted" id="kcTestOut" style="font-size:12px;flex:1"></span>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px">Show Kiln on my phones
+        <input type="checkbox" id="kcOn" ${c.enabled ? 'checked' : ''}></label>
+    </div>`;
+
+  const save = async (b, msg) => {
+    try { KC = await api('/api/kiln/config', b); if (msg) toast(msg); return true; }
+    catch(e){ toast(e.message); return false; }
+  };
+  const on = (id, ev, fn) => { const el = $('#' + id); if (el) el[ev] = fn; };
+  on('kcInstall', 'onclick', async () => { try { await api('/api/kiln/install', {}); } catch(e){ toast(e.message); } drawKilnCard(); });
+  on('kcWsl', 'onclick', async () => { try { await api('/api/kiln/installwsl', {}); toast('Approve the admin prompt on this PC'); } catch(e){ toast(e.message); } });
+  on('kcStop', 'onclick', async () => { try { await api('/api/kiln/stopbox', {}); } catch(e){ toast(e.message); } drawKilnCard(); });
+  on('kcRemove', 'onclick', async e => {
+    const b = e.currentTarget;
+    if (!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Sure? This deletes every project - tap again'; return; }
+    b.disabled = true; b.textContent = 'Removing…';
+    try { await api('/api/kiln/uninstall', {}); toast('Forge removed'); } catch(err){ toast(err.message); }
+    drawKilnCard();
+  });
+  on('kcProv', 'onchange', async e => { await save({ provider: e.target.value, base_url: '', model: '' }); drawKilnCard(); });
+  on('kcBase', 'onchange', e => save({ base_url: e.target.value.trim() }, 'Saved'));
+  on('kcKeySave', 'onclick', async () => {
+    const k = $('#kcKey').value.trim();
+    if (!k) return toast('Paste the key first');
+    if (await save({ api_key: k }, 'Key saved')){ await drawKilnCard(); kcLoadModels(); }
+  });
+  on('kcLoad', 'onclick', kcLoadModels);
+  on('kcModel', 'onchange', e => { if (e.target.value) save({ model: e.target.value }, 'Model saved').then(drawKilnCard); });
+  on('kcExport', 'onchange', e => save({ export_dir: e.target.value.trim() }, 'Saved').then(drawKilnCard));
+  on('kcSystem', 'onchange', e => save({ system: e.target.value }, 'Saved'));
+  on('kcLearn', 'onchange', e => save({ learn: e.target.checked }, e.target.checked ? 'Kiln learns from its builds' : 'Learning is off'));
+  on('kcOn', 'onchange', async e => {
+    if (e.target.checked && !(KC.sandbox.installed && KC.model)){
+      e.target.checked = false; return toast('Set up the sandbox and pick a model first');
+    }
+    await save({ enabled: e.target.checked }, e.target.checked ? 'Kiln is on - it shows in Chat on your phones' : 'Kiln is off');
+  });
+  on('kcTest', 'onclick', async () => {
+    const out = $('#kcTestOut');
+    out.textContent = 'Asking…'; out.style.color = '';
+    try { const r = await api('/api/kiln/test', {}); out.textContent = `Works - "${r.reply}" (${(r.ms / 1000).toFixed(1)}s)`; out.style.color = 'var(--good)'; }
+    catch(e){ out.textContent = e.message; out.style.color = 'var(--bad)'; }
+  });
+  clearTimeout(kcPoll);
+  if (sb.busy) kcPoll = setTimeout(() => { if (document.body.contains(box)) drawKilnCard(); }, 2000);
+}
+
+async function kcLoadModels(){
+  const sel = $('#kcModel');
+  if (!sel) return;
+  sel.innerHTML = '<option>Loading…</option>';
+  try {
+    const r = await api('/api/kiln/models', {});
+    if (!r.models.length) throw new Error('No models came back');
+    sel.innerHTML = `<option value="">Choose a model (${r.models.length})</option>` + r.models.map(m =>
+      `<option value="${esc(m.id)}" ${m.id === KC.model ? 'selected' : ''}>${esc(m.name)}${m.name !== m.id ? ' - ' + esc(m.id) : ''}</option>`).join('');
+  } catch(e){
+    sel.innerHTML = `<option value="${esc(KC.model || '')}">${esc(KC.model || 'Couldn\'t load')}</option>`;
     toast(e.message);
   }
 }

@@ -86,6 +86,18 @@
   .cc-d{font-size:11.5px;color:var(--muted);line-height:1.55;margin-top:7px}
   .cc-d a{color:var(--accent2)}
   .cc-d code{background:rgba(0,0,0,.4);padding:1px 5px;border-radius:4px}
+  .kc-s .spin{display:inline-block;width:11px;height:11px;border:2px solid color-mix(in srgb,var(--text) 25%,transparent);border-top-color:var(--accent2);border-radius:50%;animation:kcSpin .8s linear infinite}
+  @keyframes kcSpin{to{transform:rotate(360deg)}}
+  .kc-steps{display:flex;flex-direction:column;gap:6px}
+  .kc-s{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+  .kc-s i{width:16px;text-align:center;font-style:normal;color:var(--good)}
+  .kc-s.now{color:var(--text)}.kc-s.ok{color:var(--text)}
+  .kc-stat{display:flex;align-items:center;gap:8px;font-size:13px}
+  .kc-dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .kc-dot.on{background:var(--good);box-shadow:0 0 8px var(--good)}
+  .kc-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .kc-ember{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:1px;
+    background:radial-gradient(circle at 40% 40%,#fde68a,#f97316 55%,#9a3412);box-shadow:0 0 10px #f97316}
   .cc-end{display:flex;align-items:center;gap:12px;padding-top:14px;border-top:1px solid var(--line)}
   label.row{display:flex;align-items:center;gap:12px;padding:10px 0;
     border-bottom:1px solid var(--line)}

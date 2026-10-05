@@ -39,6 +39,7 @@ import uuid
 
 import memory
 import paths
+import skills
 
 CONF = paths.data("chat.json")
 HIST = paths.data("chat_history.json")
@@ -71,6 +72,8 @@ TOOLS = [
                               "ask for your Face ID or PIN on the phone first", False),
     ("memory", "Memory", "Remember what you tell it about you and your setup, and use it in later chats "
                          "(see or delete any of it from Chat > Memory on your phone)", True),
+    ("skills", "Learning", "Learn how-tos from what it does for you and get better at them, and look back through "
+                           "earlier chats (see or delete what it learned from Chat > Skills on your phone)", True),
 ]
 TOOL_IDS = {t[0] for t in TOOLS}
 SEARCHES = {
@@ -138,7 +141,7 @@ def public(local=False):
            "providerName": PROVIDERS.get(c["provider"], {}).get("name", ""),
            "model": c["model"],
            "tools": [{"id": t[0], "name": t[1], "on": c["tools"][t[0]]} for t in TOOLS],
-           "memory": memory.count()}
+           "memory": memory.count(), "skills": skills.count("chat")}
     if local:
         k = c["api_key"]
         out.update(base_url=c["base_url"], system=c["system"], defaultSystem=DEFAULT_SYSTEM,
@@ -230,13 +233,14 @@ def _headers(c):
     return h
 
 
-def list_models(b=None):
-    """The models this key can use - so nobody has to type a model name."""
-    c = config()
+def list_models(b=None, base_conf=None):
+    """The models this key can use - so nobody has to type a model name.
+    base_conf: whose saved settings to start from (Kiln has its own)."""
+    saved = base_conf or config()
+    c = dict(saved)
     if b:
-        c = dict(c)
         if b.get("provider") in PROVIDERS:
-            if b["provider"] != config()["provider"]:
+            if b["provider"] != saved["provider"]:
                 c["api_key"] = ""
             c["provider"] = b["provider"]
         if "base_url" in b:
@@ -267,14 +271,14 @@ _pm = {"at": 0.0, "key": None, "v": []}
 NOT_CHAT = re.compile(r"embed|whisper|tts|rerank|moderation|dall-e|transcribe", re.I)
 
 
-def phone_models():
+def phone_models(c=None):
     """The chat models the phone may pick from (a short cache - the picker
     opens often, the list rarely changes). For Ollama, each says how big it
     is and whether it's already loaded, i.e. answers instantly."""
-    c = config()
+    c = c or config()
     key = (c["provider"], _base(c), c["api_key"][-6:])
     if _pm["key"] != key or time.time() - _pm["at"] > 30:
-        out = [m for m in list_models() if not NOT_CHAT.search(m["id"])]
+        out = [m for m in list_models(base_conf=c) if not NOT_CHAT.search(m["id"])]
         if c["provider"] == "ollama":
             root = re.sub(r"/v1/?$", "", _base(c))
             try:
@@ -561,6 +565,13 @@ def tool_defs(c):
             ("power", "Sleep, restart, shut down or sign out of the PC. The user must approve with Face ID or PIN.",
              {"action": {"type": "string", "enum": ["sleep", "restart", "shutdown", "sign_out"]}}, ["action"]),
         ]
+    if t.get("skills"):
+        defs += [
+            ("read_skill", "Read one of your learned skills (a how-to from an earlier task) before doing a matching task.",
+             {"name": {"type": "string"}}, ["name"]),
+            ("search_past_chats", "Search earlier chats (and Kiln projects) for something talked about before.",
+             {"query": {"type": "string"}}, ["query"]),
+        ]
     if t.get("memory"):
         defs += [
             ("remember", "Save a lasting fact about the user, their people, projects, devices, setup or "
@@ -602,6 +613,8 @@ LABELS = {
     "remember": lambda a: "Remembering: %s" % str(a.get("fact", ""))[:70],
     "recall": lambda a: "Checking what it remembers",
     "forget": lambda a: "Forgetting “%s”" % str(a.get("match", ""))[:40],
+    "read_skill": lambda a: "Using what it learned: %s" % str(a.get("name", ""))[:50],
+    "search_past_chats": lambda a: "Looking back through chats for “%s”" % str(a.get("query", ""))[:40],
 }
 
 
@@ -618,6 +631,7 @@ class Tools:
         self.allowed = {_norm_url(u) for u in re.findall(r"https?://[^\s<>\"')\]]+", user_text or "")}
         self.names = {d[0] for d in tool_defs(c)}
         self.emit = lambda ev: None
+        self.used_skills = set()
 
     def run(self, name, args):
         if name not in self.names:
@@ -636,6 +650,15 @@ class Tools:
                 return {"saved": f["text"], "topics": f["topics"]}
             if name == "recall":
                 return {"facts": [{"fact": f["text"], "topics": f["topics"]} for f in memory.recall(args.get("query", ""))]}
+            if name == "read_skill":
+                s = skills.find("chat", args.get("name", ""))
+                if not s:
+                    return {"error": "No skill by that name", "skills": [x["name"] for x in skills.listing("chat")]}
+                skills.used("chat", s["name"])
+                self.used_skills.add(s["name"])
+                return {"name": s["name"], "skill": s["body"]}
+            if name == "search_past_chats":
+                return {"results": skills.search_history(args.get("query", ""))}
             if name == "forget":
                 gone = memory.forget(match=args.get("match", ""))
                 return {"forgot": gone} if gone else {"error": "Nothing saved matches that."}
@@ -668,14 +691,14 @@ def _sse(resp):
 
 
 def _anthropic_turn(c, system, msgs, defs, emit):
-    body = {"model": c["model"], "max_tokens": MAX_TOKENS, "system": system,
+    body = {"model": c["model"], "max_tokens": c.get("max_tokens") or MAX_TOKENS, "system": system,
             "messages": msgs, "stream": True}
     if defs:
         body["tools"] = [{"name": n, "description": d,
                           "input_schema": {"type": "object", "properties": p, "required": r}}
                          for n, d, p, r in defs]
     blocks, stop = [], None
-    with _open(_base(c) + "/v1/messages", body, _headers(c)) as resp:
+    with _open(_base(c) + "/v1/messages", body, _headers(c), timeout=c.get("timeout") or TIMEOUT) as resp:
         for ev in _sse(resp):
             t = ev.get("type")
             if t == "content_block_start":
@@ -712,11 +735,14 @@ def _anthropic_results(results):
                                          "content": json.dumps(res)[:20000]} for cid, res in results]}
 
 
+LAST = {}      # what the last OpenAI-style turn looked like (for diagnosing empty answers)
+
+
 def _openai_turn(c, system, msgs, defs, emit):
     body = {"model": c["model"], "stream": True,
             "messages": [{"role": "system", "content": system}] + msgs}
     # OpenAI's newer models only take max_completion_tokens; others the old name.
-    body["max_completion_tokens" if c["provider"] == "openai" else "max_tokens"] = MAX_TOKENS
+    body["max_completion_tokens" if c["provider"] == "openai" else "max_tokens"] = c.get("max_tokens") or MAX_TOKENS
     if c["provider"] == "ollama":
         # Local "thinking" models (Qwen 3.5 and co.) otherwise reason first,
         # silently, for most of a minute - and can spend every token on it.
@@ -726,13 +752,18 @@ def _openai_turn(c, system, msgs, defs, emit):
             "name": n, "description": d,
             "parameters": {"type": "object", "properties": p, "required": r}}} for n, d, p, r in defs]
     text, calls = "", {}
-    with _open(_base(c) + "/chat/completions", body, _headers(c)) as resp:
+    LAST.clear()
+    LAST.update(reasoning=0, finish=None, events=0)
+    with _open(_base(c) + "/chat/completions", body, _headers(c), timeout=c.get("timeout") or TIMEOUT) as resp:
         for ev in _sse(resp):
+            LAST["events"] += 1
             if ev.get("error"):
                 e = ev["error"]
                 raise RuntimeError(e.get("message") if isinstance(e, dict) else str(e))
             for ch in ev.get("choices") or []:
                 d = ch.get("delta") or {}
+                LAST["reasoning"] += len(d.get("reasoning") or d.get("reasoning_content") or "")
+                LAST["finish"] = ch.get("finish_reason") or LAST["finish"]
                 if d.get("content"):
                     text += d["content"]
                     emit({"t": "text", "d": d["content"]})
@@ -844,6 +875,10 @@ def send(cid, text, hooks, emit):
                    "Don't save small talk or anything secret.")
         if known:
             system += "\nWhat you already know about them (use it naturally, don't recite it):\n" + known
+    if c["tools"].get("skills"):
+        sk = skills.prompt("chat")
+        if sk:
+            system += "\n\n" + sk
     defs = tool_defs(c)
     tools = Tools(c, hooks, text)
     tools.emit = emit
@@ -890,7 +925,22 @@ def send(cid, text, hooks, emit):
             pass
     _store(cid, text, reply.strip(), used)
     emit({"t": "done", "conv": cid})
+    # The learning loop: after real work, quietly write down (or improve) the
+    # how-to - in the background, so the answer never waits on it.
+    work = [{"kind": u["name"], "label": u["label"], "ok": u["ok"]} for u in used
+            if u["name"] not in ("remember", "recall", "forget", "read_skill", "search_past_chats")]
+    recovered = bool(work) and work[-1]["ok"] and any(not w["ok"] for w in work)
+    if c["tools"].get("skills") and work and (len(work) >= 3 or tools.used_skills or recovered):
+        turn = _anthropic_turn if anthropic else _openai_turn
+        threading.Thread(target=_learn, args=(c, turn, text, work, reply, set(tools.used_skills)), daemon=True).start()
     return cid
+
+
+def _learn(c, turn, text, work, reply, used):
+    try:
+        skills.reflect(c, turn, "chat", text, work, reply, used)
+    except Exception:
+        pass
 
 
 _PERSONAL = re.compile(r"(?i)\b(i|i'?m|i'?ve|i'?d|i'?ll|my|mine|me|remember|call me)\b")

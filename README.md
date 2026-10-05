@@ -54,6 +54,19 @@ From then on your phone has a grid of tiles you arrange yourself:
   With PC control on it can lock the PC, switch audio, take screenshots and
   more - and closing apps or sleep/restart/shut down always wait for your
   Face ID or PIN. The key never leaves the PC.
+- **Kiln, a coding agent (Aether Forge).** Tap **Kiln** in the chat and
+  describe what you want - a web page, a script, a small tool. It writes the
+  code, runs it, reads the errors and fixes them, then shows you the result:
+  web pages preview live on your phone, files and code are a tab away, and
+  "Save to PC" (Face ID / PIN) copies a project out. It builds in its own
+  sandbox on the same PC - a private Linux with Docker, one container per
+  project, all in one folder, no Docker Desktop and no admin - and it has its
+  own model setting, so you can give coding a stronger model than the chat.
+  Jobs keep running if your phone locks; the feed picks up where it left off.
+- **It learns.** After a task that took real work, the chat and Kiln write
+  down how they did it - steps and pitfalls - and improve that note next
+  time they hit a snag (Hermes Agent's learning loop, kept small and on your
+  PC). Read or delete every skill on your phone; each is a Markdown file.
 - **Notifications you choose.** Downloads finishing, Steam updates, a new
   phone signing in, the GPU running hot… each one Off, Quiet, Normal or
   Important, per phone.
@@ -263,6 +276,13 @@ installs it:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/builtbycodyrd/aether-remote/main/add-ons/homelab/install.sh)"
 ```
 
+**Kiln (Aether Forge)** is built into the Windows app rather than shipped
+separately: switch it on in the PC app (Settings → Chatbox → Add-ons → Kiln),
+press *Set up the sandbox* (about two minutes, ~1 GB, needs WSL 2 - Windows
+10/11 have it; if it's missing there's a button to install it, which needs an
+admin click and a restart), pick a model, done. *Remove Forge* deletes the
+sandbox and every project in one go.
+
 Add-ons are versioned separately from the Windows app (tags like
 `homelab-v0.1.0`), so an add-on update never shows up as a PC update.
 
@@ -344,6 +364,15 @@ down and where the edges are.
   refuses everyone once setup is finished.
 - Uploaded artwork is validated as a real image before it is written.
 
+- Kiln's sandbox: each project's container sees only its own folder, runs
+  as an unprivileged user underneath (Docker user namespaces), can't gain
+  privileges, and can reach the internet but not your PC, your LAN or your
+  tailnet. The sandbox's Linux mounts no drive but the projects folder and
+  can't start Windows programs. API keys never go inside it. Previews run in
+  a sandboxed frame on a throwaway origin, so a page Kiln wrote can't touch
+  the app's cookies or API. Deleting a project or copying it to the PC needs
+  Face ID / PIN.
+
 **What to be aware of**
 
 - Anyone already on your tailnet or your Wi-Fi can reach the login page. The
@@ -351,6 +380,9 @@ down and where the edges are.
 - Your authenticator secret is stored unencrypted in your own user profile.
   Anyone who can read your files can already do far worse.
 - The installer is not code-signed, so SmartScreen will warn on first run.
+- Kiln's isolation is a container's: a kernel or Docker bug that let code
+  break out would land it in the sandbox's Linux, which could then reach
+  your drives. That's the same edge every Docker sandbox has.
 - Screen sharing sends unencrypted JPEG frames over your local network or
   tailnet. Tailscale encrypts that end to end; plain Wi-Fi does not.
 

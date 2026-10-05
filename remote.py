@@ -56,6 +56,9 @@ import push           # noqa: E402
 import watch          # noqa: E402
 import chat           # noqa: E402
 import memory         # noqa: E402
+import forge          # noqa: E402
+import kiln           # noqa: E402
+import skills         # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -220,6 +223,9 @@ def log(msg):
             sys.stdout.flush()
     except Exception:
         pass
+
+
+kiln.LOG = lambda msg: log(msg)
 
 
 def load_config():
@@ -491,8 +497,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ssl.SSLError):
+            pass      # the phone (or browser) left before the answer arrived
 
     MAX_BODY = 1 << 20      # every request body is small JSON
 
@@ -620,6 +626,13 @@ class Handler(BaseHTTPRequestHandler):
             # Whatever PC this is - the name is not baked into the page.
             html = html.replace("{{PC}}", auth.ACCOUNT)
             return self._send(200, html, "text/html; charset=utf-8")
+
+        if path.startswith("/kp/"):
+            # Kiln's preview of what it built. The link itself is the key (a
+            # long random one per project, forgotten when Aether restarts):
+            # the page runs sandboxed - its own origin, no cookies - so code
+            # Kiln wrote can never call this app's API as you.
+            return self._kiln_preview(u.path)
 
         if not self._authed():
             # A page opened in a browser (the phone app, or the PC app from
@@ -771,7 +784,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"items": push.history()})
 
             if path == "/api/chat":
-                return self._send(200, dict(chat.public(), convs=chat.conversations()))
+                return self._send(200, dict(chat.public(), convs=chat.conversations(), kiln=kiln.public()["ready"]))
 
             if path == "/api/chat/conv":
                 c = chat.conversation(qs.get("id", [""])[0])
@@ -794,6 +807,56 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"models": chat.phone_models(), "current": chat.config()["model"]})
                 except (ValueError, RuntimeError, OSError) as e:
                     return self._send(502, {"error": str(e)})
+
+            if path == "/api/skills":
+                # What the chat and Kiln have learned (names and one-liners).
+                return self._send(200, {"skills": skills.listing()})
+
+            if path == "/api/skills/get":
+                try:
+                    s = skills.get(qs.get("scope", [""])[0], qs.get("name", [""])[0])
+                except ValueError:
+                    s = None
+                return self._send(200, s) if s else self._send(404, {"error": "No such skill"})
+
+            if path == "/api/kiln":
+                return self._send(200, dict(kiln.public(), projects=forge.listing() if kiln.config()["enabled"] else []))
+
+            if path == "/api/kiln/project":
+                try:
+                    return self._send(200, kiln.project(qs.get("id", [""])[0]))
+                except ValueError as e:
+                    return self._send(404, {"error": str(e)})
+
+            if path == "/api/kiln/stream":
+                return self._kiln_stream(qs.get("id", [""])[0], qs.get("since", ["0"])[0])
+
+            if path == "/api/kiln/file":
+                try:
+                    text, cut = forge.read(qs.get("id", [""])[0], qs.get("path", [""])[0], 400000)
+                except (ValueError, OSError) as e:
+                    return self._send(404, {"error": str(e)})
+                return self._send(200, {"text": text, "truncated": cut})
+
+            if path == "/api/kiln/zip":
+                pid = qs.get("id", [""])[0]
+                m = forge.meta(pid)
+                if not m:
+                    return self._send(404, {"error": "No such project"})
+                name = re.sub(r"[^A-Za-z0-9 ._-]", "", m["name"]).strip() or pid
+                return self._send(200, forge.zip_bytes(pid), "application/zip",
+                                  {"Content-Disposition": 'attachment; filename="%s.zip"' % name})
+
+            if path == "/api/kiln/models":
+                try:
+                    return self._send(200, {"models": kiln.phone_models(), "current": kiln.config()["model"]})
+                except (ValueError, RuntimeError, OSError) as e:
+                    return self._send(502, {"error": str(e)})
+
+            if path == "/api/kiln/config":
+                if not self._is_local():
+                    return self._send(403, {"error": "set Kiln up from the PC app"})
+                return self._send(200, kiln.public(local=True))
 
             if path == "/api/chat/config":
                 # The key and the setup live on the PC: only the PC app sees them.
@@ -1156,6 +1219,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": str(e)})
                 log("chat model switched to %s" % r["model"])
                 return self._send(200, r)
+
+            if path.startswith("/api/kiln/"):
+                return self._kiln_post(path, b)
+
+            if path == "/api/skills/delete":
+                try:
+                    gone = skills.delete(str(b.get("scope", "")), str(b.get("name", "")))
+                except ValueError:
+                    gone = False
+                if gone:
+                    log("skill deleted: %s/%s" % (b.get("scope"), b.get("name")))
+                return self._send(200 if gone else 404, {"ok": gone, "skills": skills.listing()})
 
             if path in ("/api/chat/config", "/api/chat/models", "/api/chat/test"):
                 if not self._is_local():
@@ -2268,6 +2343,142 @@ class Handler(BaseHTTPRequestHandler):
         log("screenshot taken (monitor %d)" % mon)
         return self._send(200, buf.getvalue(), "image/png",
                           {"Content-Disposition": 'attachment; filename="%s"' % name})
+
+    # -- Kiln (Aether Forge) ---------------------------------------------
+    def _kiln_post(self, path, b):
+        pid = str(b.get("id", ""))
+        try:
+            if path == "/api/kiln/new":
+                if not kiln.public()["ready"]:
+                    return self._send(400, {"error": "Kiln isn't set up yet - PC app > Settings > Chatbox > Kiln."})
+                m = forge.create(b.get("name"))
+                log("kiln: new project %s" % m["id"])
+                return self._send(200, kiln.project(m["id"]))
+            if path == "/api/kiln/send":
+                return self._send(200, kiln.send(pid, b.get("text")))
+            if path == "/api/kiln/stop":
+                return self._send(200, {"stopped": kiln.stop(pid)})
+            if path == "/api/kiln/rename":
+                forge.rename(pid, b.get("name"))
+                return self._send(200, {"ok": True, "projects": forge.listing()})
+            if path == "/api/kiln/delete":
+                # Deleting a project's work can't be undone: Face ID / PIN.
+                if not forge.meta(pid):
+                    return self._send(404, {"error": "No such project"})
+                if self._stepup("kiln:delete:" + pid, b):
+                    return None
+                kiln.stop(pid)
+                forge.delete(pid)
+                log("kiln: deleted project %s" % pid)
+                return self._send(200, {"ok": True, "projects": forge.listing()})
+            if path == "/api/kiln/export":
+                # Copying out of the sandbox onto the PC: Face ID / PIN.
+                if not forge.meta(pid):
+                    return self._send(404, {"error": "No such project"})
+                if self._stepup("kiln:export:" + pid, b):
+                    return None
+                dest = forge.export(pid, kiln.export_dir())
+                log("kiln: exported %s to %s" % (pid, dest))
+                return self._send(200, {"ok": True, "path": dest})
+            if path == "/api/kiln/model":
+                r = kiln.pick_model(str(b.get("model", "")))
+                log("kiln model switched to %s" % r["model"])
+                return self._send(200, r)
+            # Everything below sets Kiln up: the PC app only.
+            if not self._is_local():
+                return self._send(403, {"error": "set Kiln up from the PC app"})
+            if path == "/api/kiln/config":
+                r = kiln.update(b)
+                log("kiln settings saved (%s)" % r["provider"])
+                return self._send(200, r)
+            if path == "/api/kiln/models":
+                return self._send(200, {"models": kiln.list_models(b)})
+            if path == "/api/kiln/test":
+                return self._send(200, kiln.test())
+            if path == "/api/kiln/install":
+                log("kiln: setting up the sandbox")
+                forge.install()
+                return self._send(200, kiln.public(local=True))
+            if path == "/api/kiln/installwsl":
+                forge.install_wsl()
+                return self._send(200, {"ok": True})
+            if path == "/api/kiln/stopbox":
+                forge.stop()
+                return self._send(200, kiln.public(local=True))
+            if path == "/api/kiln/uninstall":
+                for p in list(kiln.JOBS):
+                    kiln.stop(p)
+                forge.uninstall()
+                log("kiln: Forge removed")
+                return self._send(200, kiln.public(local=True))
+        except (ValueError, RuntimeError, OSError) as e:
+            return self._send(400, {"error": str(e)[:400]})
+        return self._send(404, {"error": "no such path"})
+
+    def _kiln_stream(self, pid, since):
+        """A job's events as server-sent events, from `since` on - so a phone
+        that dropped off picks up exactly where it left off."""
+        try:
+            since = max(0, int(since))
+        except ValueError:
+            since = 0
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def put(ev):
+            self.wfile.write(("data: %s\n\n" % json.dumps(ev)).encode("utf-8"))
+            self.wfile.flush()
+        try:
+            j = kiln.JOBS.get(pid)
+            if not j:
+                put({"t": "idle"})
+                return None
+            end = time.time() + 1800
+            while time.time() < end:
+                evs, done = j.wait(since, 15)
+                for ev in evs:
+                    put(ev)
+                since += len(evs)
+                if done and since >= len(j.events):
+                    put({"t": "end"})
+                    return None
+                if not evs:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        return None
+
+    def _kiln_preview(self, raw):
+        parts = raw.split("/", 3)            # "", "kp", token, path
+        if len(parts) < 3:
+            return self._send(404, {"error": "no such preview"})
+        from urllib.parse import unquote
+        rel = unquote(parts[3]) if len(parts) > 3 else ""
+        try:
+            p = kiln.preview_file(parts[2], rel)
+        except (ValueError, OSError):
+            return self._send(404, b"<p style='font:15px system-ui;color:#999;padding:24px'>Nothing to show here yet.</p>",
+                              "text/html; charset=utf-8",
+                              {"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'"})
+        if len(parts) == 3:                    # /kp/<token> -> /kp/<token>/ so relative links work
+            return self._send(302, b"", "text/html", {"Location": raw + "/"})
+        ctype = mimetypes.guess_type(p)[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ctype in ("application/javascript", "application/json", "image/svg+xml"):
+            ctype += "; charset=utf-8"
+        with open(p, "rb") as f:
+            data = f.read(50 * 1024 * 1024)
+        return self._send(200, data, ctype, {
+            # Its own throwaway origin: scripts run, but it can't read this
+            # app's cookies or storage, or call its API as you.
+            "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads",
+            "Referrer-Policy": "no-referrer",
+            "Cache-Control": "no-store"})
 
     def _chat_send(self, b):
         """Stream the AI's answer as server-sent events. The tools it may use

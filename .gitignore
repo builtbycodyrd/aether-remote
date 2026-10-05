@@ -75,3 +75,8 @@ desktop.ini
 
 # second factor: PIN hash + registered passkeys (this install's, never shipped)
 sf.json
+# Kiln: the sandbox, its projects, its settings (has a key)
+forge/
+kiln.json
+# What the chat and Kiln learned (yours, not the repo's)
+skills/

@@ -3887,6 +3887,7 @@ function fvBuild(){
 /* The tab bar: Remote | Files. PCs only - the homelab has no files to show. */
 function showTab(which){
   const files = which === 'files', chatOn = which === 'chat';
+  if (typeof knEl === 'function' && knEl() && knEl().classList.contains('show')) knClose();
   if (files && !fvEl()) fvBuild();
   if (files && !FV.data) fvGo('');
   if (chatOn && !chEl()){ chBuild(); chDraw(); }
@@ -4450,7 +4451,9 @@ function chBuild(){
     <form class="ch-comp" autocomplete="off"><div class="ch-box">
       <textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea>
       <div class="ch-row"><button type="button" class="ch-pill" data-ch="model" aria-label="Change model">
-        <span class="ch-pm"></span>${XI.down}</button><div class="ch-sp"></div>
+        <span class="ch-pm"></span>${XI.down}</button>
+        <button type="button" class="ch-pill kn-pill" data-ch="kiln" aria-label="Open Kiln" hidden><i class="kn-ember"></i><span>Kiln</span></button>
+        <div class="ch-sp"></div>
         <button type="submit" class="ch-send" aria-label="Send">${XI.send}</button></div></div></form>
     <div class="ch-pop" role="menu"></div>
     <div class="ch-drawer"><div class="ch-dscrim" data-ch="dclose"></div>
@@ -4560,6 +4563,8 @@ function chAct(b){
   else if (a === 'dclose') chDrawerClose();
   else if (a === 'model'){ const p = chEl().querySelector('.ch-pop'); p.classList.contains('show') ? chPopClose() : chModels(b); }
   else if (a === 'memory'){ chDrawerClose(); ta.blur(); memOpen(); }
+  else if (a === 'kiln'){ ta.blur(); knOpenScreen(); }
+  else if (a === 'skills'){ chDrawerClose(); ta.blur(); sklOpen('chat'); }
 }
 const chShort = id => String(id || '').split('/').pop();
 
@@ -4621,6 +4626,8 @@ function chDrawerPaint(){
       : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
   body.innerHTML = `${mem ? `<button class="ch-memrow" data-ch="memory">${XI.graph}<span><b>Memory</b>
       <small>${j.memory ? `${j.memory} thing${j.memory === 1 ? '' : 's'} it knows about you` : 'Nothing saved yet'}</small></span>${FVI.chev}</button>` : ''}
+    ${(j.tools || []).some(t => t.id === 'skills' && t.on) ? `<button class="ch-memrow" data-ch="skills">${XI.spark}<span><b>Skills</b>
+      <small>${j.skills ? `${j.skills} thing${j.skills === 1 ? '' : 's'} it has learned to do` : 'Learns from what it does for you'}</small></span>${FVI.chev}</button>` : ''}
     <div class="ch-dlabel">Recent</div>
     <div class="ch-dlist">${convs.map(c => `<div class="ch-ci${c.id === CH.conv ? ' on' : ''}" data-chopen="${esc(c.id)}">
         <span class="ch-ct"><b>${esc(c.title || 'Chat')}</b><small>${day(c.updated)}</small></span>
@@ -4687,6 +4694,7 @@ function chDraw(){
   const c = CH.info || {};
   el.querySelector('.ch-model').textContent = c.model || '';
   el.querySelector('.ch-pm').textContent = chShort(c.model) || 'Pick a model';
+  el.querySelector('.kn-pill').hidden = !c.kiln;
   const box = el.querySelector('.ch-msgs');
   if (!CH.msgs.length){
     const on = (c.tools || []).filter(t => t.on).map(t => t.name.toLowerCase());
@@ -4785,7 +4793,16 @@ const ORB_STATES = {
   idle:  { r: 1,   spin: .16, wob: .045, bright: .8 },
   think: { r: .64, spin: .95, wob: .12,  bright: 1 },
   tool:  { r: .8,  spin: .55, wob: .08,  bright: .95 },
+  // Kiln's states. Each also sets effects (fx) that fade in and out - never snap.
+  'forge-idle': { r: 1, spin: .18, wob: .05, bright: .85, fx: { ember: .55 } },
+  forge:    { r: .78, spin: .62, wob: .1,  bright: 1,    fx: { ember: 1, sparks: 1 } },
+  exec:     { r: .84, spin: .34, wob: .06, bright: .95,  fx: { ember: .35, scan: 1 } },
+  approval: { r: .92, spin: .1,  wob: .03, bright: .9,   fx: { ring: 1 } },
+  done:     { r: 1,   spin: .3,  wob: .05, bright: 1.15, fx: { flash: 1, ember: .3 } },
+  error:    { r: .86, spin: .2,  wob: .22, bright: .9,   fx: { err: 1 } },
 };
+const ORB_FX = ['ember', 'sparks', 'scan', 'ring', 'flash', 'err'];
+const ORB_EMBER = [249, 115, 22], ORB_HOT = [253, 186, 52], ORB_AMBER = [245, 158, 11], ORB_RED = [244, 63, 94];
 class Orb {
   constructor(size, n){
     this.size = size;
@@ -4803,14 +4820,22 @@ class Orb {
         k: .3 + .7 * Math.pow(Math.random(), .4), ph: Math.random() * 6.283, f: .6 + Math.random() * 1.4 });
     }
     this.want = ORB_STATES.idle; this.cur = Object.assign({}, this.want);
+    this.fx = {}; this.fxWant = {};
+    ORB_FX.forEach(k => { this.fx[k] = 0; this.fxWant[k] = 0; });
+    this.sparks = [];
     this.energy = 0; this.a = Math.random() * 6; this.t = 0; this.fr = 0; this.raf = 0; this.last = 0;
     this.col = themeRGB();
     this.still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
   state(s){
     const w = ORB_STATES[s] || ORB_STATES.idle;
-    if (w !== this.want){ this.want = w; this.energy = 1; }
-    if (this.still){ this.cur = Object.assign({}, w); this.col = themeRGB(); this.draw(); }
+    if (w !== this.want){
+      this.want = w; this.energy = 1;
+      ORB_FX.forEach(k => { this.fxWant[k] = (w.fx && w.fx[k]) || 0; });
+      if (s === 'done') this.fx.flash = 1;          // a quick bright flash, then it fades
+      if (s === 'error') this.fx.err = 1;
+    }
+    if (this.still){ this.cur = Object.assign({}, w); Object.assign(this.fx, this.fxWant); this.col = themeRGB(); this.draw(); }
     else this.run();
   }
   run(){ if (!this.raf) this.raf = requestAnimationFrame(ts => this.frame(ts)); }
@@ -4820,16 +4845,36 @@ class Orb {
     const dt = this.last ? Math.min(.05, (ts - this.last) / 1000) : .016;
     this.last = ts;
     if (++this.fr % 60 === 0) this.col = themeRGB();
-    for (const k in this.cur) this.cur[k] += (this.want[k] - this.cur[k]) * Math.min(1, dt * 3.2);
+    for (const k in this.cur) if (typeof this.cur[k] === 'number') this.cur[k] += (this.want[k] - this.cur[k]) * Math.min(1, dt * 3.2);
+    for (const k of ORB_FX){
+      const speed = k === 'flash' ? 2.2 : k === 'err' ? 2.6 : 2.4;
+      // flash and err are one-offs: they decay toward 0 even while the state holds
+      const target = (k === 'flash' || k === 'err') ? 0 : this.fxWant[k];
+      this.fx[k] += (target - this.fx[k]) * Math.min(1, dt * speed);
+    }
     this.energy *= Math.pow(.2, dt);
     this.t += dt;
     this.a += dt * (this.cur.spin + this.energy * 2.4);
+    if (this.fx.sparks > .05 && Math.random() < dt * 14 * this.fx.sparks){
+      const th = Math.random() * 6.283;
+      this.sparks.push({ x: Math.cos(th) * .25, y: Math.sin(th) * .2, vx: Math.cos(th) * .35, vy: -.5 - Math.random() * .5, life: 1 });
+    }
+    for (const sp of this.sparks){ sp.x += sp.vx * dt; sp.y += sp.vy * dt; sp.vy += dt * .15; sp.life -= dt * 1.1; }
+    this.sparks = this.sparks.filter(sp => sp.life > 0);
     this.draw();
     this.run();
   }
   draw(){
-    const x = this.x, W = this.c.width, h = W / 2, R = h * .74 * this.cur.r, b = this.cur.bright;
-    const [p1, p2] = this.col;
+    const x = this.x, W = this.c.width, h = W / 2, R = h * .74 * this.cur.r, fx = this.fx;
+    const b = this.cur.bright * (1 + fx.flash * .55);
+    let [p1, p2] = this.col;
+    // Error: a short red flicker over everything.
+    if (fx.err > .01){
+      const fl = fx.err * (Math.sin(this.t * 38) > -.2 ? 1 : .55);
+      p1 = knMixC(p1, ORB_RED, fl * .85); p2 = knMixC(p2, ORB_RED, fl * .7);
+    }
+    if (fx.flash > .01){ p1 = knMixC(p1, [255, 255, 255], fx.flash * .45); p2 = knMixC(p2, [255, 255, 255], fx.flash * .45); }
+    const ember = knMixC(ORB_EMBER, this.col[0], .2), hot = knMixC(ORB_HOT, this.col[0], .1);
     x.globalCompositeOperation = 'source-over';
     x.clearRect(0, 0, W, W);
     const g = x.createRadialGradient(h, h, 0, h, h, R * 1.3);
@@ -4837,25 +4882,67 @@ class Orb {
     g.addColorStop(.5, `rgba(${p1},${.1 * b})`);
     g.addColorStop(1, `rgba(${p1},0)`);
     x.fillStyle = g; x.fillRect(0, 0, W, W);
+    if (fx.ember > .01){
+      // The forge: a hot core inside your theme's shell.
+      const e = x.createRadialGradient(h, h, 0, h, h, R * .75);
+      const pulse = .85 + Math.sin(this.t * 3.1) * .15;
+      e.addColorStop(0, `rgba(${hot},${.55 * fx.ember * pulse})`);
+      e.addColorStop(.45, `rgba(${ember},${.28 * fx.ember * pulse})`);
+      e.addColorStop(1, `rgba(${ember},0)`);
+      x.fillStyle = e; x.fillRect(0, 0, W, W);
+    }
     x.globalCompositeOperation = 'lighter';
     const ca = Math.cos(this.a), sa = Math.sin(this.a);
     const tilt = .4 + Math.sin(this.t * .3) * .18, ct = Math.cos(tilt), st = Math.sin(tilt);
     const round = this.size > 40, dot = this.d * (round ? 1.15 : .95), wob = this.cur.wob * 2.2;
+    const scanY = fx.scan > .01 ? Math.sin(this.t * 2.1) * R * .95 : 1e9;
     for (const q of this.p){
       const w = 1 + Math.sin(this.t * q.f * 1.8 + q.ph) * wob;
       const px = q.x * q.k * w, py = q.y * q.k * w, pz = q.z * q.k * w;
       const x1 = px * ca + pz * sa, z0 = -px * sa + pz * ca;
       const y1 = py * ct - z0 * st, z1 = py * st + z0 * ct;
       const s = 2.6 / (2.6 + z1), m = (1 - z1) / 2;
-      const r = p1[0] + (p2[0] - p1[0]) * m | 0, gg = p1[1] + (p2[1] - p1[1]) * m | 0, bb = p1[2] + (p2[2] - p1[2]) * m | 0;
-      x.fillStyle = `rgba(${r},${gg},${bb},${(.22 + .62 * m) * b})`;
+      let c = knMixC(p1, p2, m);
+      const inner = Math.max(0, 1 - q.k) * 1.7;
+      if (fx.ember > .01 && inner > 0) c = knMixC(c, knMixC(ember, hot, inner * .6), Math.min(1, inner * fx.ember));
+      let a = (.22 + .62 * m) * b;
+      const sy = y1 * R * s;
+      if (fx.scan > .01){
+        const dd = Math.abs(sy - scanY) / (R * .12);
+        if (dd < 1){ const k = (1 - dd) * fx.scan; c = knMixC(c, this.col[1], k * .8); a = Math.min(1, a + k * .7); }
+      }
+      x.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
       const sz = dot * s * (.7 + .6 * q.k);
-      if (round){ x.beginPath(); x.arc(h + x1 * R * s, h + y1 * R * s, sz * .62, 0, 6.283); x.fill(); }
-      else x.fillRect(h + x1 * R * s - sz / 2, h + y1 * R * s - sz / 2, sz, sz);
+      if (round){ x.beginPath(); x.arc(h + x1 * R * s, h + sy, sz * .62, 0, 6.283); x.fill(); }
+      else x.fillRect(h + x1 * R * s - sz / 2, h + sy - sz / 2, sz, sz);
+    }
+    if (fx.scan > .01 && scanY < 1e8){
+      // Running: a scan line sweeps the orb, in your second colour.
+      const yy = h + scanY, half = Math.sqrt(Math.max(0, R * R * 1.05 - scanY * scanY));
+      const lg = x.createLinearGradient(h - half, 0, h + half, 0);
+      lg.addColorStop(0, `rgba(${this.col[1]},0)`); lg.addColorStop(.5, `rgba(${this.col[1]},${.75 * fx.scan})`); lg.addColorStop(1, `rgba(${this.col[1]},0)`);
+      x.fillStyle = lg; x.fillRect(h - half, yy - this.d * .8, half * 2, this.d * 1.6);
+    }
+    if (this.sparks.length){
+      for (const sp of this.sparks){
+        x.fillStyle = `rgba(${knMixC(hot, ember, 1 - sp.life)},${Math.max(0, sp.life) * .9 * fx.sparks})`;
+        x.beginPath(); x.arc(h + sp.x * R * 1.2, h + sp.y * R * 1.2, this.d * (round ? 1.3 : .8), 0, 6.283); x.fill();
+      }
     }
     x.globalCompositeOperation = 'source-over';
+    if (fx.ring > .01){
+      // Needs you: a steady amber ring (tinted toward your theme).
+      const amb = knMixC(ORB_AMBER, this.col[0], .12), pulse = .78 + Math.sin(this.t * 2.4) * .14;
+      x.save();
+      x.strokeStyle = `rgba(${amb},${fx.ring * pulse})`;
+      x.lineWidth = this.d * (round ? 2.2 : 1.4);
+      x.shadowColor = `rgba(${amb},${fx.ring * .8})`; x.shadowBlur = this.d * (round ? 14 : 5);
+      x.beginPath(); x.arc(h, h, Math.min(h * .96, R * 1.12 + this.d * 2), 0, 6.283); x.stroke();
+      x.restore();
+    }
   }
 }
+function knMixC(a, b, t){ return [a[0] + (b[0] - a[0]) * t | 0, a[1] + (b[1] - a[1]) * t | 0, a[2] + (b[2] - a[2]) * t | 0]; }
 /* The chat's live line and the empty screen each borrow one orb; it moves
    from node to node as the message re-renders, so it never restarts. */
 function chOrbMount(){
@@ -5296,3 +5383,630 @@ function showHomeScreenGuide(force){
 
 // Let the board paint first - a sheet over a blank grid looks broken.
 setTimeout(() => { try { showHomeScreenGuide(false); } catch(e){} }, 1400);
+
+/* ================= Kiln (Aether Forge): the coding agent =================
+   Chat › Kiln. Same look as the chat - your theme, your corners - but it's
+   the forge: an ember glow that follows what Kiln is doing, an orb with an
+   ember core, and three views: Build (talk to it), Files, Preview.
+   A job runs on the PC whether or not the phone is watching; the feed picks
+   up where it left off (every event is numbered). */
+const KN = { info: null, pid: null, proj: null, msgs: [], live: null, since: 0, ctrl: null, view: 'build',
+  state: 'idle', orb: null, hero: null, file: null, page: null, models: null };
+function knEl(){ return document.getElementById('kiln'); }
+const KXI = {
+  flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1-3.6 2.2-4.8.3 1.6 1 2.6 2 3 0-3 .3-5.6.8-8.2z"/></svg>',
+  dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  term: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l4 4-4 4M12 17h7"/></svg>',
+  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  reload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  pc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  zip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
+};
+const KN_STEP_ICON = { write_file: KXI.pen, edit_file: KXI.pen, delete_path: XI.trash, run: KXI.term, read_file: KXI.file,
+  list_files: KXI.folder, error: '!', learn: XI.spark, read_skill: XI.spark, search_history: XI.graph };
+const KN_STATE_TEXT = { think: 'Thinking', forge: 'Forging', exec: 'Running', approval: 'Needs your OK', done: 'Done', error: 'Something went wrong' };
+
+/* The ambient glow and the orb follow the state. Colours come from your
+   theme; only "needs your OK" (amber) and "error" (red) are fixed, since
+   those must always mean the same thing - and even they're tinted toward
+   your theme so they sit with it. */
+function knTheme(){
+  const [p1, p2] = themeRGB();
+  const bg = (getComputedStyle(document.documentElement).getPropertyValue('--bg') || '#01020a').trim();
+  const m = /^#?([0-9a-f]{6})$/i.exec(bg), n = m ? parseInt(m[1], 16) : 0x01020a;
+  const lum = ((n >> 16 & 255) * .2126 + (n >> 8 & 255) * .7152 + (n & 255) * .0722) / 255;
+  return { p1, p2, lum };
+}
+const knMix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+const knHex = c => '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+function knGlowFor(s){
+  const { p1, p2 } = knTheme();
+  const ember = knMix([249, 115, 22], p1, .22);
+  return knHex({ forge: ember, exec: knMix(p2, ember, .15), approval: knMix([245, 158, 11], p1, .12),
+    error: knMix([244, 63, 94], p1, .1), done: knMix(p1, [255, 255, 255], .25) }[s] || p1);
+}
+function knSetState(s){
+  KN.state = s;
+  const el = knEl(); if (!el) return;
+  const { lum } = knTheme();
+  el.style.setProperty('--kg', knGlowFor(s));
+  el.style.setProperty('--kg2', knGlowFor(s === 'idle' || s === 'think' ? 'exec' : 'forge'));
+  // Strong on dark backgrounds, gentle on light ones (it'd wash them out).
+  el.style.setProperty('--kga', String(lum > .5 ? .55 : lum > .25 ? .75 : 1));
+  el.classList.toggle('lightbg', lum > .55);
+  el.dataset.state = s;
+  const busy = s !== 'idle' && s !== 'done' && s !== 'error';
+  el.classList.toggle('working', busy);
+  if (KN.orb) KN.orb.state(s === 'idle' ? 'think' : s);
+  if (KN.hero) KN.hero.state(s);
+}
+
+function knBuild(){
+  const el = document.createElement('div');
+  el.id = 'kiln';
+  el.innerHTML = `<div class="kn-glow"></div>
+    <div class="ch-head kn-head"><button class="fv-ib" data-kn="back" aria-label="Back to chat">${XI.back}</button>
+      <button class="ch-title" type="button" data-kn="projects"><b><span class="kn-mark">${KXI.flame}</span>Kiln</b><span class="ch-model kn-pname"></span></button>
+      <button class="fv-ib" data-kn="menu" aria-label="Project">${KXI.dots}</button></div>
+    <div class="kn-tabs" role="tablist"><button data-knv="build" class="on">Build</button><button data-knv="files">Files</button>
+      <button data-knv="preview">Preview</button><i class="kn-ink"></i></div>
+    <div class="kn-views">
+      <div class="kn-view kn-build"><div class="ch-scroll"><div class="ch-msgs"></div></div></div>
+      <div class="kn-view kn-files"><div class="kn-fscroll"></div></div>
+      <div class="kn-view kn-prev"><div class="kn-pbar"><select class="kn-psel"></select>
+        <button class="fv-ib" data-kn="reload" aria-label="Reload">${KXI.reload}</button>
+        <button class="fv-ib" data-kn="popout" aria-label="Open full screen">${KXI.open}</button></div>
+        <div class="kn-frame"></div></div>
+    </div>
+    <form class="ch-comp kn-comp" autocomplete="off"><div class="ch-box">
+      <textarea rows="1" placeholder="What should Kiln build?" enterkeyhint="send"></textarea>
+      <div class="ch-row"><button type="button" class="ch-pill" data-kn="model" aria-label="Coding model">
+        <span class="ch-pm"></span>${XI.down}</button><div class="ch-sp"></div>
+        <button type="submit" class="ch-send kn-send" aria-label="Send">${XI.send}</button></div></div></form>
+    <div class="ch-pop" role="menu"></div>
+    <div class="ch-drawer"><div class="ch-dscrim" data-kn="dclose"></div>
+      <aside class="ch-dpanel"><div class="ch-dhead"><b>Projects</b>
+        <button class="fv-ib" data-kn="newproj" aria-label="New project">${XI.plus}</button></div>
+        <div class="ch-dbody"></div></aside></div>
+    <div class="kn-sheet"><div class="ch-dscrim" data-kn="sclose"></div><div class="kn-sbody"></div></div>`;
+  document.body.appendChild(el);
+  const ta = el.querySelector('textarea'), form = el.querySelector('form'), sc = el.querySelector('.kn-build .ch-scroll');
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; knBtn(); };
+  ta.addEventListener('input', grow);
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)){ e.preventDefault(); form.requestSubmit(); } });
+  knKeyboard(el, ta, sc);
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    if (knBusy()){ knStop(); return; }
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = ''; grow();
+    knSend(text);
+  });
+  let downOn = null;
+  el.addEventListener('pointerdown', e => { downOn = e.target.closest('[data-kn],[data-knv]'); }, true);
+  el.addEventListener('pointerup', e => {
+    const b = downOn; downOn = null;
+    if (!b || !b.isConnected || e.button > 0) return;
+    const r = b.getBoundingClientRect();
+    if (e.clientX < r.left - 24 || e.clientX > r.right + 24 || e.clientY < r.top - 24 || e.clientY > r.bottom + 24) return;
+    e.preventDefault(); knAct(b); b.dataset.fired = Date.now();
+  });
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-kn],[data-knv]');
+    if (b){ if (Date.now() - (+b.dataset.fired || 0) > 600) knAct(b); return; }
+    const sug = e.target.closest('[data-knsug]'); if (sug){ knSend(sug.dataset.knsug); return; }
+    const st = e.target.closest('.kn-step.has'); if (st){ st.classList.toggle('open'); return; }
+    const f = e.target.closest('[data-knfile]'); if (f){ knOpenFile(f.dataset.knfile); return; }
+    const pd = e.target.closest('[data-kndel]'); if (pd){ e.stopPropagation(); knDelete(pd.dataset.kndel, pd); return; }
+    const pj = e.target.closest('[data-knopen]'); if (pj){ knDrawerClose(); knOpen(pj.dataset.knopen); return; }
+    if (!e.target.closest('.ch-pop')) knPopClose();
+  });
+  el.querySelector('.kn-psel').addEventListener('change', e => { KN.page = e.target.value; knPreview(true); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && knEl() && knEl().classList.contains('show')) knResume(); });
+  return el;
+}
+
+/* The keyboard: like the chat - the screen shrinks as it rises, no jolt. */
+function knKeyboard(el, ta, sc){
+  let kbGuess = 0, blurT = 0;
+  const fit = () => {
+    if (!el.classList.contains('show') || !window.visualViewport) return;
+    const vv = visualViewport, kb = window.innerHeight - vv.height;
+    if (kb > 150){ kbGuess = kb; try { localStorage.setItem('aether.kb', Math.round(kb)); } catch(e){} }
+    el.style.top = vv.offsetTop + 'px';
+    el.style.height = vv.height + 'px';
+    if (KN.view === 'build') sc.scrollTop = sc.scrollHeight;
+  };
+  if (window.visualViewport){
+    let q = 0;
+    const later = () => { if (!q) q = requestAnimationFrame(() => { q = 0; fit(); }); };
+    visualViewport.addEventListener('resize', later);
+    visualViewport.addEventListener('scroll', later);
+  }
+  ta.addEventListener('focus', () => {
+    clearTimeout(blurT); knPopClose();
+    document.body.classList.add('kbd');
+    try { kbGuess = +localStorage.getItem('aether.kb') || kbGuess; } catch(e){}
+    const vv = window.visualViewport;
+    if (kbGuess && vv && vv.height > window.innerHeight - 60) el.style.height = (window.innerHeight - kbGuess) + 'px';
+    if (KN.view !== 'build') knView('build');
+  });
+  ta.addEventListener('blur', () => {
+    blurT = setTimeout(() => {
+      document.body.classList.remove('kbd');
+      if (window.visualViewport && visualViewport.height > window.innerHeight - 60) el.style.height = window.innerHeight + 'px';
+    }, 60);
+  });
+}
+
+function knAct(b){
+  if (b.dataset.knv) return knView(b.dataset.knv);
+  const a = b.dataset.kn, ta = knEl().querySelector('textarea');
+  if (a === 'back') knClose();
+  else if (a === 'projects'){ ta.blur(); knPopClose(); knDrawerOpen(); }
+  else if (a === 'dclose') knDrawerClose();
+  else if (a === 'skills'){ knDrawerClose(); sklOpen('kiln'); }
+  else if (a === 'newproj'){ knDrawerClose(); knNew(); }
+  else if (a === 'menu'){ ta.blur(); knMenu(); }
+  else if (a === 'sclose') knSheetClose();
+  else if (a === 'model'){ const p = knEl().querySelector('.ch-pop'); p.classList.contains('show') ? knPopClose() : knModels(b); }
+  else if (a === 'reload') knPreview(true);
+  else if (a === 'popout'){ if (KN.proj && KN.page) window.open(KN.proj.preview + KN.page.split('/').map(encodeURIComponent).join('/'), '_blank', 'noopener'); }
+  else if (a === 'fback'){ KN.file = null; knFiles(); }
+  else if (a === 'save') knExport();
+  else if (a === 'zip'){ knSheetClose(); if (KN.pid) location.href = '/api/kiln/zip?id=' + encodeURIComponent(KN.pid); }
+  else if (a === 'rename') knRename();
+  else if (a === 'delete'){ knSheetClose(); knDelete(KN.pid); }
+}
+
+async function knOpenScreen(){
+  const el = knEl() || knBuild();
+  chPopClose(); chDrawerClose();
+  const ta = chEl() && chEl().querySelector('textarea'); if (ta) ta.blur();
+  el.classList.add('show');
+  document.body.classList.add('knOn');
+  if (window.visualViewport) el.style.height = visualViewport.height + 'px';
+  knSetState('idle');
+  try { KN.info = await api('/api/kiln'); } catch(err){ toast(err.message); }
+  const last = (() => { try { return localStorage.getItem('aether.kiln.p'); } catch(e){ return null; } })();
+  const projs = (KN.info && KN.info.projects) || [];
+  if (KN.pid && projs.some(p => p.id === KN.pid)) return knOpen(KN.pid);
+  if (last && projs.some(p => p.id === last)) return knOpen(last);
+  KN.pid = null; KN.proj = null; KN.msgs = []; knDraw();
+}
+function knClose(){
+  const el = knEl(); if (!el) return;
+  knPopClose(); knDrawerClose(); knSheetClose();
+  el.querySelector('textarea').blur();
+  el.classList.remove('show');
+  document.body.classList.remove('knOn');
+  if (KN.ctrl){ KN.ctrl.abort(); KN.ctrl = null; }
+  const fr = el.querySelector('.kn-frame'); fr.innerHTML = ''; KN.framed = null;
+}
+
+function knView(v){
+  KN.view = v;
+  const el = knEl();
+  el.querySelectorAll('[data-knv]').forEach(b => b.classList.toggle('on', b.dataset.knv === v));
+  el.dataset.view = v;
+  const i = ['build', 'files', 'preview'].indexOf(v);
+  el.querySelector('.kn-ink').style.transform = `translateX(${i * 100}%)`;
+  if (v === 'files') knFiles();
+  if (v === 'preview') knPreview(false);
+}
+
+function knBusy(){ return !!(KN.live && KN.live.live); }
+function knBtn(){
+  const el = knEl(); if (!el) return;
+  const b = el.querySelector('.kn-send'), ta = el.querySelector('textarea'), busy = knBusy();
+  b.innerHTML = busy ? XI.stop : XI.send;
+  b.classList.toggle('busy', busy);
+  b.disabled = !busy && !ta.value.trim();
+  ta.placeholder = KN.pid ? (busy ? 'Kiln is working…' : 'Ask for a change…') : 'What should Kiln build?';
+}
+
+function knStepHTML(s){
+  const ic = KN_STEP_ICON[s.kind] || KXI.term;
+  const state = s.ok === undefined ? 'run' : s.ok ? 'ok' : 'bad';
+  const out = (s.out || '').trim();
+  return `<div class="kn-step ${state}${out ? ' has' : ''}${s.kind === 'run' && s.ok === undefined ? ' open' : ''}">
+    <div class="kn-sh"><i class="kn-si">${ic === '!' ? '!' : ic}</i><span class="kn-sl">${esc(s.label)}</span>
+      <i class="kn-sk">${state === 'run' ? '<span class="spin"></span>' : state === 'ok' ? XI.check : '!'}</i></div>
+    ${out ? `<pre class="kn-out">${esc(out.split('\n').slice(-40).join('\n'))}</pre>` : ''}</div>`;
+}
+function knMsgHTML(m, i){
+  if (m.role === 'user') return `<div class="ch-m me"><div class="ch-b">${esc(m.text).replace(/\n/g, '<br>')}</div></div>`;
+  const steps = (m.steps || []).map(knStepHTML).join('');
+  const running = m.live && (m.steps || []).some(s => s.ok === undefined);
+  const live = m.live ? `<div class="ch-live"><span class="ch-orbslot"></span><span class="ch-status">${esc(
+    running ? (m.steps.find(s => s.ok === undefined) || {}).label || 'Working' : (m.status || KN_STATE_TEXT[KN.state] || 'Thinking'))}</span></div>` : '';
+  const pv = !m.live && m.pages ? `<button class="kn-pvlink" data-knv="preview">${KXI.eye}<span>See it</span></button>` : '';
+  return `<div class="ch-m ai kn-ai" data-i="${i}">${steps ? `<div class="kn-steps">${steps}</div>` : ''}${live}
+    ${m.text ? `<div class="ch-b md">${md(m.text)}</div>` : ''}${pv}
+    ${m.error ? `<div class="ch-err">${esc(m.error)}</div>` : ''}</div>`;
+}
+function knDraw(){
+  const el = knEl(); if (!el) return;
+  const info = KN.info || {};
+  el.querySelector('.kn-pname').textContent = KN.proj ? KN.proj.name : (info.model ? 'New project' : '');
+  el.querySelector('.ch-pm').textContent = chShort(info.model) || 'Model';
+  el.classList.toggle('noproj', !KN.pid);
+  const box = el.querySelector('.kn-build .ch-msgs');
+  const all = KN.msgs.concat(KN.live ? [KN.live] : []);
+  if (!all.length){
+    const projs = info.projects || [];
+    box.innerHTML = `<div class="ch-empty kn-empty"><span class="ch-heroslot kn-hero"></span>
+      <b>${KN.pid ? 'Ready when you are' : 'What should we forge?'}</b>
+      <span>${KN.pid ? 'Tell Kiln what to build or change.' : 'Kiln writes the code, runs it in its sandbox on your PC and fixes what breaks. Describe it below.'}</span>
+      <div class="ch-sugs">${(KN.pid ? [] : ['A tip calculator page', 'A Python script that renames photos by date', 'A pomodoro timer with my theme colors'])
+        .map(s => `<button data-knsug="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+      ${!KN.pid && projs.length ? `<div class="kn-recent"><div class="ch-dlabel">Your projects</div>${projs.slice(0, 4).map(p =>
+        `<button class="kn-prow" data-knopen="${esc(p.id)}">${KXI.folder}<span><b>${esc(p.name)}</b><small>${knWhen(p.updated)}</small></span>${FVI.chev}</button>`).join('')}</div>` : ''}</div>`;
+  } else box.innerHTML = all.map(knMsgHTML).join('');
+  knOrbMount();
+  knBtn();
+  const sc = el.querySelector('.kn-build .ch-scroll');
+  sc.scrollTop = sc.scrollHeight;
+}
+function knPatchLive(){
+  const el = knEl(); if (!el || !KN.live) return;
+  const i = KN.msgs.length, node = el.querySelector(`.kn-ai[data-i="${i}"]`);
+  if (!node) return knDraw();
+  const open = [...node.querySelectorAll('.kn-step')].map(s => s.classList.contains('open'));
+  node.outerHTML = knMsgHTML(KN.live, i);
+  const fresh = el.querySelector(`.kn-ai[data-i="${i}"]`);
+  fresh.querySelectorAll('.kn-step').forEach((s, k) => { if (open[k] !== undefined && s.classList.contains('has')) s.classList.toggle('open', open[k]); });
+  fresh.querySelectorAll('.kn-out').forEach(p => p.scrollTop = p.scrollHeight);
+  knOrbMount();
+  const sc = el.querySelector('.kn-build .ch-scroll');
+  if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 200) sc.scrollTop = sc.scrollHeight;
+}
+function knOrbMount(){
+  const el = knEl(); if (!el) return;
+  const slot = el.querySelector('.kn-build .ch-orbslot');
+  if (slot){
+    if (!KN.orb) KN.orb = new Orb(24, 170);
+    if (KN.orb.c.parentNode !== slot) slot.appendChild(KN.orb.c);
+    KN.orb.state(KN.state === 'idle' ? 'think' : KN.state);
+  }
+  const hero = el.querySelector('.kn-hero');
+  if (hero){
+    if (!KN.hero) KN.hero = new Orb(120, 820);
+    if (KN.hero.c.parentNode !== hero) hero.appendChild(KN.hero.c);
+    KN.hero.state(KN.state === 'idle' ? 'forge-idle' : KN.state);
+  }
+}
+const knWhen = ts => { const d = new Date(ts * 1000), now = new Date();
+  return d.toDateString() === now.toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+
+/* ---- projects ---- */
+async function knOpen(pid){
+  if (KN.ctrl){ KN.ctrl.abort(); KN.ctrl = null; }
+  try { KN.proj = await api('/api/kiln/project?id=' + encodeURIComponent(pid)); }
+  catch(err){ toast(err.message); KN.pid = null; KN.proj = null; KN.msgs = []; return knDraw(); }
+  KN.pid = pid; KN.file = null; KN.page = null;
+  try { localStorage.setItem('aether.kiln.p', pid); } catch(e){}
+  KN.msgs = (KN.proj.msgs || []).map(m => ({ role: m.role, text: m.text, steps: (m.steps || []).map(s => Object.assign({}, s)) }));
+  const j = KN.proj.job;
+  KN.live = null;
+  if (j && j.running){
+    if (KN.msgs.length && KN.msgs[KN.msgs.length - 1].role === 'assistant') KN.msgs.pop();
+    KN.live = { role: 'assistant', text: '', steps: [], live: true };
+    KN.since = 0;
+    knSetState(j.state || 'think');
+    knFollow();
+  } else knSetState('idle');
+  const fr = knEl().querySelector('.kn-frame'); fr.innerHTML = ''; KN.framed = null;
+  knDraw();
+  if (KN.view === 'files') knFiles();
+  if (KN.view === 'preview') knPreview(true);
+}
+async function knNew(text){
+  try {
+    const name = text ? text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ') : 'New project';
+    const p = await api('/api/kiln/new', { name });
+    KN.info = await api('/api/kiln').catch(() => KN.info);
+    await knOpen(p.id);
+    return p.id;
+  } catch(err){ toast(err.message); return null; }
+}
+async function knSend(text){
+  if (knBusy()) return;
+  if (!KN.pid){ const id = await knNew(text); if (!id) return; }
+  KN.msgs.push({ role: 'user', text });
+  KN.live = { role: 'assistant', text: '', steps: [], live: true };
+  knSetState('think');
+  knDraw();
+  try {
+    const r = await api('/api/kiln/send', { id: KN.pid, text });
+    KN.since = 0;                     // the feed replays this job from its start
+    knFollow();
+  } catch(err){
+    KN.live.live = false; KN.live.error = err.message; knSetState('error');
+    KN.msgs.push(KN.live); KN.live = null; knDraw();
+  }
+}
+async function knStop(){
+  if (!KN.pid) return;
+  try { await api('/api/kiln/stop', { id: KN.pid }); } catch(err){ toast(err.message); }
+}
+
+/* Follow the job's events. Drops (phone locked, signal lost) just pick up
+   again from the last event seen. */
+async function knFollow(){
+  if (KN.ctrl) KN.ctrl.abort();
+  const ctrl = KN.ctrl = new AbortController(), pid = KN.pid;
+  let frame = 0;
+  const paint = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; knPatchLive(); }); };
+  for (let tries = 0; tries < 40 && KN.pid === pid && !ctrl.signal.aborted; tries++){
+    try {
+      const r = await fetch(`/api/kiln/stream?id=${encodeURIComponent(pid)}&since=${KN.since}`, { signal: ctrl.signal, cache: 'no-store' });
+      if (r.status === 401){ location.href = '/login'; return; }
+      if (r.status === 403){ await sfUnlock(); continue; }
+      if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+      const rd = r.body.getReader(), dec = new TextDecoder();
+      let buf = '', ended = false;
+      for (;;){
+        const { value, done } = await rd.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let k;
+        while ((k = buf.indexOf('\n\n')) >= 0){
+          const chunk = buf.slice(0, k); buf = buf.slice(k + 2);
+          if (!chunk.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(chunk.slice(5)); } catch(e){ continue; }
+          if (typeof ev.n === 'number') KN.since = ev.n + 1;
+          if (ev.t === 'end' || ev.t === 'idle'){ ended = true; break; }
+          knEvent(ev);
+          paint();
+        }
+        if (ended) break;
+      }
+      if (ended) return knFinish();
+      tries = 0;
+    } catch(err){
+      if (ctrl.signal.aborted) return;
+      await new Promise(r => setTimeout(r, Math.min(4000, 500 + tries * 400)));
+    }
+  }
+}
+function knEvent(ev){
+  const L = KN.live; if (!L) return;
+  if (ev.t === 'state'){ knSetState(ev.s); if (ev.label) L.status = ev.label; else L.status = null; }
+  else if (ev.t === 'text') L.text += ev.d;
+  else if (ev.t === 'step') L.steps.push({ kind: ev.kind, label: ev.label });
+  else if (ev.t === 'out'){ const s = L.steps[L.steps.length - 1]; if (s){ s.out = ((s.out || '') + ev.d).slice(-6000); } }
+  else if (ev.t === 'step_done'){ const s = L.steps[L.steps.length - 1]; if (s){ s.ok = ev.ok; if (ev.out) s.out = ev.out; } }
+  else if (ev.t === 'files'){ KN.dirty = true; if (ev.path && /\.html?$/i.test(ev.path)) L.pages = true; }
+  else if (ev.t === 'error'){ L.error = ev.d; }
+  else if (ev.t === 'stopped'){ L.error = 'Stopped'; }
+}
+async function knFinish(){
+  const L = KN.live;
+  if (L){ L.live = false; (L.steps || []).forEach(s => { if (s.ok === undefined) s.ok = false; }); }
+  if (KN.ctrl) KN.ctrl = null;
+  try {
+    KN.proj = await api('/api/kiln/project?id=' + encodeURIComponent(KN.pid));
+    KN.msgs = (KN.proj.msgs || []).map(m => ({ role: m.role, text: m.text, steps: m.steps || [] }));
+    const last = KN.msgs[KN.msgs.length - 1];
+    if (last && last.role === 'assistant' && L){ last.pages = L.pages; last.error = L.error && L.error !== 'Stopped' ? L.error : null; }
+  } catch(e){ if (L) KN.msgs.push(L); }
+  KN.live = null;
+  if (KN.state === 'done') setTimeout(() => { if (!knBusy()) knSetState('idle'); }, 1200);
+  else if (KN.state !== 'error') knSetState('idle');
+  else setTimeout(() => { if (!knBusy()) knSetState('idle'); }, 1500);
+  knDraw();
+  if (KN.dirty){ KN.dirty = false; KN.framed = null; if (KN.view === 'preview') knPreview(true); if (KN.view === 'files') knFiles(); }
+}
+function knResume(){ if (KN.pid && KN.live && !KN.ctrl) knFollow(); else if (KN.pid && !KN.live) knOpen(KN.pid); }
+
+/* ---- files ---- */
+async function knFiles(){
+  const box = knEl().querySelector('.kn-fscroll');
+  if (!KN.pid){ box.innerHTML = '<div class="kn-none">Start a project and its files show up here.</div>'; return; }
+  if (KN.file) return knShowFile();
+  try { KN.proj = Object.assign(KN.proj || {}, await api('/api/kiln/project?id=' + encodeURIComponent(KN.pid))); } catch(e){}
+  const files = (KN.proj && KN.proj.files) || [];
+  if (!files.length){ box.innerHTML = '<div class="kn-none">No files yet.</div>'; return; }
+  const kb = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+  let lastDir = null;
+  box.innerHTML = `<div class="kn-flist">${files.map(f => {
+    const parts = f.path.replace(/\/$/, '').split('/'), name = parts.pop(), dir = parts.join('/');
+    const head = dir !== lastDir && dir ? `<div class="kn-fdir">${KXI.folder}<span>${esc(dir)}/</span></div>` : '';
+    lastDir = dir;
+    if (f.dir) return head + `<div class="kn-fi dim" style="--d:${parts.length}">${KXI.folder}<span><b>${esc(name)}/</b><small>tool files - not shown</small></span></div>`;
+    return head + `<button class="kn-fi" style="--d:${parts.length}" data-knfile="${esc(f.path)}">${KXI.file}<span><b>${esc(name)}</b><small>${kb(f.size || 0)}</small></span>${FVI.chev}</button>`;
+  }).join('')}${KN.proj.moreFiles ? '<div class="kn-none">…and more</div>' : ''}</div>`;
+}
+async function knOpenFile(path){ KN.file = { path, text: null }; knShowFile(); }
+async function knShowFile(){
+  const box = knEl().querySelector('.kn-fscroll'), f = KN.file;
+  const head = `<div class="kn-fhead"><button class="fv-ib" data-kn="fback" aria-label="Back">${XI.back}</button><b>${esc(f.path)}</b></div>`;
+  if (f.text === null){
+    box.innerHTML = head + '<div class="kn-none"><span class="spin"></span></div>';
+    try { const r = await api('/api/kiln/file?id=' + encodeURIComponent(KN.pid) + '&path=' + encodeURIComponent(f.path)); f.text = r.text; f.cut = r.truncated; }
+    catch(err){ f.text = ''; f.err = err.message; }
+    if (KN.file !== f) return;
+  }
+  const lines = f.text.split('\n');
+  box.innerHTML = head + (f.err ? `<div class="kn-none">${esc(f.err)}</div>` :
+    `<div class="kn-code"><pre class="kn-ln">${lines.map((_, i) => i + 1).join('\n')}</pre><pre class="kn-src">${esc(f.text)}</pre></div>${f.cut ? '<div class="kn-none">(cut short - it\'s a big file)</div>' : ''}`);
+}
+
+/* ---- preview: the page Kiln made, live, in its own sandboxed frame ---- */
+async function knPreview(reload){
+  const el = knEl(), fr = el.querySelector('.kn-frame'), sel = el.querySelector('.kn-psel');
+  if (!KN.pid){ fr.innerHTML = '<div class="kn-none">Nothing to preview yet.</div>'; sel.innerHTML = ''; return; }
+  if (reload || !KN.proj || !KN.proj.pages){ try { KN.proj = Object.assign(KN.proj || {}, await api('/api/kiln/project?id=' + encodeURIComponent(KN.pid))); } catch(e){} }
+  const pages = (KN.proj && KN.proj.pages) || [];
+  if (!pages.length){ fr.innerHTML = '<div class="kn-none">No web page yet. Ask Kiln to make one, or look in Files.</div>'; sel.innerHTML = ''; KN.framed = null; return; }
+  if (!KN.page || !pages.includes(KN.page)) KN.page = pages[0];
+  sel.innerHTML = pages.map(p => `<option value="${esc(p)}" ${p === KN.page ? 'selected' : ''}>${esc(p)}</option>`).join('');
+  sel.style.visibility = pages.length > 1 ? 'visible' : 'hidden';
+  const src = KN.proj.preview + KN.page.split('/').map(encodeURIComponent).join('/');
+  if (!reload && KN.framed === src) return;
+  KN.framed = src;
+  fr.innerHTML = `<iframe sandbox="allow-scripts allow-forms allow-modals allow-popups" referrerpolicy="no-referrer" src="${esc(src)}?t=${Date.now()}" title="Preview"></iframe>`;
+}
+
+/* ---- drawer: your projects ---- */
+async function knDrawerOpen(){
+  const el = knEl();
+  knDrawerPaint();
+  el.querySelector('.ch-drawer').classList.add('open');
+  try { KN.info = await api('/api/kiln'); knDrawerPaint(); } catch(e){}
+}
+function knDrawerClose(){ const el = knEl(); if (el) el.querySelector('.ch-drawer').classList.remove('open'); }
+function knDrawerPaint(){
+  const body = knEl().querySelector('.ch-dbody'), ps = (KN.info && KN.info.projects) || [];
+  body.innerHTML = `<button class="ch-memrow" data-kn="skills">${XI.spark}<span><b>Skills</b>
+      <small>${(KN.info || {}).skills ? `${KN.info.skills} thing${KN.info.skills === 1 ? '' : 's'} Kiln has learned` : 'Kiln learns from each build'}</small></span>${FVI.chev}</button>
+    <div class="ch-dlabel">Projects</div><div class="ch-dlist">${ps.map(p => `<div class="ch-ci${p.id === KN.pid ? ' on' : ''}" data-knopen="${esc(p.id)}">
+      <span class="ch-ct"><b>${esc(p.name)}</b><small>${knWhen(p.updated)}</small></span>
+      <button class="ch-cdel" data-kndel="${esc(p.id)}" aria-label="Delete">${XI.trash}</button></div>`).join('')
+    || '<div class="ch-dnone">No projects yet.</div>'}</div>
+    <div class="kn-dnote">${XI.lock} Deleting a project or saving it to your PC asks for Face ID or your PIN.</div>`;
+}
+async function knDelete(pid, btn){
+  if (btn){
+    const row = btn.closest('.ch-ci');
+    if (row && !row.classList.contains('sure')){ row.classList.add('sure'); setTimeout(() => row.classList.remove('sure'), 3000); return; }
+  }
+  const before = KN.state;
+  knSetState('approval');
+  try {
+    const r = await api('/api/kiln/delete', { id: pid });
+    KN.info = Object.assign(KN.info || {}, { projects: r.projects });
+    if (KN.pid === pid){ KN.pid = null; KN.proj = null; KN.msgs = []; KN.live = null; try { localStorage.removeItem('aether.kiln.p'); } catch(e){} }
+    knSetState('idle'); knDraw(); knDrawerPaint();
+    toast('Project deleted');
+  } catch(err){ knSetState(before === 'approval' ? 'idle' : before); if (!/cancel/i.test(err.message)) toast(err.message); }
+}
+async function knExport(){
+  knSheetClose();
+  if (!KN.pid) return;
+  knSetState('approval');
+  try { const r = await api('/api/kiln/export', { id: KN.pid }); knSetState('done'); toast('Saved to ' + r.path); setTimeout(() => knSetState('idle'), 1200); }
+  catch(err){ knSetState('idle'); if (!/cancel/i.test(err.message)) toast(err.message); }
+}
+async function knRename(){
+  knSheetClose();
+  if (!KN.pid) return;
+  const name = prompt('Project name', KN.proj ? KN.proj.name : '');
+  if (!name || !name.trim()) return;
+  try { const r = await api('/api/kiln/rename', { id: KN.pid, name }); KN.info = Object.assign(KN.info || {}, { projects: r.projects }); KN.proj.name = name.trim(); knDraw(); }
+  catch(err){ toast(err.message); }
+}
+
+/* ---- the project menu (⋯) ---- */
+function knMenu(){
+  const el = knEl(), s = el.querySelector('.kn-sheet');
+  if (!KN.pid){ knDrawerOpen(); return; }
+  s.querySelector('.kn-sbody').innerHTML = `<div class="kn-sgrab"></div><div class="kn-stitle">${esc(KN.proj ? KN.proj.name : '')}</div>
+    <button class="kn-sbtn" data-kn="save">${KXI.pc}<span><b>Save to PC</b><small>Copies it out of the sandbox - asks for Face ID / PIN</small></span></button>
+    <button class="kn-sbtn" data-kn="zip">${KXI.zip}<span><b>Download as zip</b><small>To this phone</small></span></button>
+    <button class="kn-sbtn" data-kn="rename">${KXI.pen}<span><b>Rename</b></span></button>
+    <button class="kn-sbtn bad" data-kn="delete">${XI.trash}<span><b>Delete project</b><small>Its files and its container - asks for Face ID / PIN</small></span></button>`;
+  s.classList.add('open');
+}
+function knSheetClose(){ const el = knEl(); if (el) el.querySelector('.kn-sheet').classList.remove('open'); }
+
+/* ---- the model menu (Kiln's own model) ---- */
+async function knModels(anchor){
+  const el = knEl(), pop = el.querySelector('.ch-pop');
+  const er = el.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
+  pop.classList.add('up');
+  pop.style.left = Math.max(10, ar.left - er.left) + 'px';
+  pop.style.top = ''; pop.style.bottom = (er.bottom - ar.top + 8) + 'px';
+  const paint = () => {
+    const cur = (KN.info || {}).model || '', ms = KN.models;
+    pop.innerHTML = `<div class="ch-ph"><span>Coding model</span><em>${esc((KN.info || {}).providerName || '')}</em></div>
+      ${ms ? (ms.length ? ms.map(m => `<button class="ch-pi${m.id === cur ? ' on' : ''}" data-knpick="${esc(m.id)}" role="menuitem">
+        <span class="ch-pt"><b>${esc(chShort(m.id))}</b><small>${esc([m.detail, m.loaded ? 'ready' : ''].filter(Boolean).join(' · '))}</small></span>
+        ${m.loaded ? '<i class="ch-live-dot"></i>' : ''}<i class="ch-pc">${m.id === cur ? XI.check : ''}</i></button>`).join('')
+        : '<div class="ch-pnote">No models found.</div>') : '<div class="ch-pnote"><span class="spin"></span>Looking…</div>'}
+      <div class="ch-pnote">Bigger models build better. Change the provider in the PC app.</div>`;
+    pop.querySelectorAll('[data-knpick]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (b.dataset.knpick === cur){ knPopClose(); return; }
+      b.classList.add('busy');
+      try { const r = await api('/api/kiln/model', { model: b.dataset.knpick }); KN.info = Object.assign(KN.info || {}, r); knPopClose(); knDraw(); toast('Kiln now uses ' + chShort(r.model)); }
+      catch(err){ b.classList.remove('busy'); toast(err.message); }
+    });
+  };
+  paint();
+  requestAnimationFrame(() => pop.classList.add('show'));
+  try { KN.models = (await api('/api/kiln/models')).models || []; }
+  catch(err){ if (!KN.models){ pop.innerHTML = `<div class="ch-pnote bad">${esc(err.message)}</div>`; return; } }
+  if (pop.classList.contains('show')) paint();
+}
+function knPopClose(){ const el = knEl(); if (el) el.querySelector('.ch-pop').classList.remove('show'); }
+
+
+/* ================= Skills: what the chat and Kiln have learned =================
+   After real work they write down how they did it (and improve it the next
+   time). Here you can read every how-to and delete any of them. */
+const SKL = { el: null, scope: 'chat', list: [], open: null };
+function sklBuild(){
+  const el = document.createElement('div');
+  el.id = 'skl';
+  el.innerHTML = `<div class="ch-head"><button class="fv-ib" data-skl="back" aria-label="Back">${XI.back}</button>
+      <div class="ch-title"><b>Skills</b><span class="ch-model">What it has learned to do</span></div><span style="width:36px"></span></div>
+    <div class="kn-tabs skl-tabs"><button data-sklv="chat" class="on">Chat</button><button data-sklv="kiln">Kiln</button><i class="kn-ink"></i></div>
+    <div class="skl-scroll"><div class="skl-list"></div></div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-skl]'), v = e.target.closest('[data-sklv]');
+    if (b && b.dataset.skl === 'back') return sklClose();
+    if (v){ SKL.scope = v.dataset.sklv; SKL.open = null; return sklPaint(); }
+    const del = e.target.closest('[data-skldel]');
+    if (del){
+      e.stopPropagation();
+      if (!del.dataset.sure){ del.dataset.sure = 1; del.textContent = 'Tap again to delete'; return; }
+      try { const r = await api('/api/skills/delete', { scope: SKL.scope, name: del.dataset.skldel }); SKL.list = r.skills; SKL.open = null; sklPaint(); toast('Forgotten'); }
+      catch(err){ toast(err.message); }
+      return;
+    }
+    const card = e.target.closest('[data-skl-name]');
+    if (card){ const n = card.dataset.sklName; SKL.open = SKL.open === n ? null : n; sklPaint(); if (SKL.open) sklLoad(n); }
+  });
+  return el;
+}
+async function sklOpen(scope){
+  if (!SKL.el) SKL.el = sklBuild();
+  SKL.scope = scope || 'chat'; SKL.open = null; SKL.bodies = {};
+  SKL.el.classList.add('show');
+  document.body.classList.add('sklOn');
+  sklPaint();
+  try { SKL.list = (await api('/api/skills')).skills || []; } catch(err){ toast(err.message); }
+  sklPaint();
+}
+function sklClose(){ if (SKL.el) SKL.el.classList.remove('show'); document.body.classList.remove('sklOn'); }
+async function sklLoad(name){
+  if (SKL.bodies[SKL.scope + '/' + name]) return;
+  try { SKL.bodies[SKL.scope + '/' + name] = await api('/api/skills/get?scope=' + SKL.scope + '&name=' + encodeURIComponent(name)); sklPaint(); }
+  catch(err){ toast(err.message); }
+}
+function sklPaint(){
+  const el = SKL.el;
+  el.querySelectorAll('[data-sklv]').forEach(b => b.classList.toggle('on', b.dataset.sklv === SKL.scope));
+  el.querySelector('.kn-ink').style.transform = `translateX(${SKL.scope === 'kiln' ? 100 : 0}%)`;
+  const ks = (SKL.list || []).filter(k => k.scope === SKL.scope);
+  const ago = ts => { const d = (Date.now() / 1000 - ts) / 86400; return d < 1 ? 'today' : d < 2 ? 'yesterday' : Math.round(d) + ' days ago'; };
+  el.querySelector('.skl-list').innerHTML = ks.length ? `<div class="skl-intro">${SKL.scope === 'kiln'
+      ? 'After a build that took real work, Kiln writes down how it did it - and fixes the note when it hits a new snag. It reads the right one before similar builds.'
+      : 'After something that took a few steps, the chat writes down how it did it, so next time it gets it right first try.'}</div>` +
+    ks.map(k => { const full = SKL.bodies[SKL.scope + '/' + k.name], open = SKL.open === k.name;
+      return `<div class="skl-card${open ? ' open' : ''}" data-skl-name="${esc(k.name)}">
+        <div class="skl-h"><i>${XI.spark}</i><span><b>${esc(k.name.replace(/-/g, ' '))}</b><small>${esc(k.description)}</small></span></div>
+        <div class="skl-meta">${k.uses ? `used ${k.uses}×` : 'not used yet'} · ${k.version > 1 ? `improved ${k.version - 1}× · ` : ''}${ago(k.updated)}</div>
+        ${open ? `<div class="skl-body">${full ? `<div class="ch-b md">${md(full.body)}</div>` : '<span class="spin"></span>'}</div>
+          <button class="skl-del" data-skldel="${esc(k.name)}">Delete this skill</button>` : ''}</div>`; }).join('')
+    : `<div class="kn-none" style="flex-direction:column;gap:10px">${XI.spark}<span>${SKL.scope === 'kiln' ? 'Kiln hasn\'t learned anything yet. It saves a how-to after builds that take real work.' : 'Nothing learned yet. It saves a how-to after tasks that take a few steps.'}</span></div>`;
+}
