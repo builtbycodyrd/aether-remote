@@ -1177,12 +1177,23 @@ async function drawChatCard(){
   const base = $('#ccBase');
   if (base) base.onchange = () => save({ base_url: base.value.trim() }, 'Saved');
   const ks = $('#ccKeySave');
-  if (ks) ks.onclick = async () => {
-    const k = $('#ccKey').value.trim();
-    if (!k) return toast('Paste the key first');
-    if (await save({ api_key: k }, 'Key saved')){ await drawChatCard(); loadModels(); }
+  // The key saves itself the moment it's pasted - a key that was pasted but
+  // never saved looked set up (the model list loads without one) and then
+  // every message came back "key refused".
+  const saveKey = async () => {
+    const inp = $('#ccKey'), k = inp ? inp.value.trim() : '';
+    if (!k || inp.dataset.saving) return !k;
+    inp.dataset.saving = 1;
+    const okk = await save({ api_key: k }, 'Key saved');
+    if (inp) delete inp.dataset.saving;
+    if (okk){ await drawChatCard(); loadModels(); }
+    return okk;
   };
-  $('#ccLoad').onclick = loadModels;
+  if (ks) ks.onclick = () => { if (!$('#ccKey').value.trim()) return toast('Paste the key first'); saveKey(); };
+  const ki = $('#ccKey');
+  if (ki){ ki.addEventListener('paste', () => setTimeout(saveKey, 60)); ki.addEventListener('change', saveKey);
+    ki.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); }); }
+  $('#ccLoad').onclick = async () => { if (await saveKey() !== false) loadModels(); };
   $('#ccModel').onchange = e => { if (e.target.value){ $('#ccModelTxt').value = e.target.value; save({ model: e.target.value }, 'Model saved').then(drawChatCard); } };
   $('#ccModelTxt').onchange = e => save({ model: e.target.value.trim() }, 'Model saved').then(drawChatCard);
   box.querySelectorAll('[data-cctool]').forEach(cb => cb.onchange = () =>
@@ -1199,6 +1210,7 @@ async function drawChatCard(){
     refreshPreview();
   };
   $('#ccTest').onclick = async () => {
+    if ((await saveKey()) === false) return;
     const out = $('#ccTestOut');
     out.textContent = 'Asking…'; out.style.color = '';
     try { const r = await api('/api/chat/test', {}); out.textContent = `Works - it replied "${r.reply}" in ${(r.ms / 1000).toFixed(1)}s`; out.style.color = 'var(--good)'; }
@@ -1311,12 +1323,20 @@ async function drawKilnCard(){
   });
   on('kcProv', 'onchange', async e => { await save({ provider: e.target.value, base_url: '', model: '' }); drawKilnCard(); });
   on('kcBase', 'onchange', e => save({ base_url: e.target.value.trim() }, 'Saved'));
-  on('kcKeySave', 'onclick', async () => {
-    const k = $('#kcKey').value.trim();
-    if (!k) return toast('Paste the key first');
-    if (await save({ api_key: k }, 'Key saved')){ await drawKilnCard(); kcLoadModels(); }
-  });
-  on('kcLoad', 'onclick', kcLoadModels);
+  const kSaveKey = async () => {
+    const inp = $('#kcKey'), k = inp ? inp.value.trim() : '';
+    if (!k || inp.dataset.saving) return !k;
+    inp.dataset.saving = 1;
+    const okk = await save({ api_key: k }, 'Key saved');
+    if (inp) delete inp.dataset.saving;
+    if (okk){ await drawKilnCard(); kcLoadModels(); }
+    return okk;
+  };
+  on('kcKeySave', 'onclick', () => { if (!$('#kcKey').value.trim()) return toast('Paste the key first'); kSaveKey(); });
+  const kki = $('#kcKey');
+  if (kki){ kki.addEventListener('paste', () => setTimeout(kSaveKey, 60)); kki.addEventListener('change', kSaveKey);
+    kki.addEventListener('keydown', e => { if (e.key === 'Enter') kSaveKey(); }); }
+  on('kcLoad', 'onclick', async () => { if (await kSaveKey() !== false) kcLoadModels(); });
   on('kcModel', 'onchange', e => { if (e.target.value) save({ model: e.target.value }, 'Model saved').then(drawKilnCard); });
   on('kcExport', 'onchange', e => save({ export_dir: e.target.value.trim() }, 'Saved').then(drawKilnCard));
   on('kcSystem', 'onchange', e => save({ system: e.target.value }, 'Saved'));
@@ -1328,6 +1348,7 @@ async function drawKilnCard(){
     await save({ enabled: e.target.checked }, e.target.checked ? 'Kiln is on - it shows in Chat on your phones' : 'Kiln is off');
   });
   on('kcTest', 'onclick', async () => {
+    if ((await kSaveKey()) === false) return;
     const out = $('#kcTestOut');
     out.textContent = 'Asking…'; out.style.color = '';
     try { const r = await api('/api/kiln/test', {}); out.textContent = `Works - "${r.reply}" (${(r.ms / 1000).toFixed(1)}s)`; out.style.color = 'var(--good)'; }

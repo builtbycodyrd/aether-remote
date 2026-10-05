@@ -134,7 +134,7 @@ def update(b):
     if "model" in b:
         c["model"] = str(b.get("model") or "").strip()[:120]
     if "api_key" in b:
-        c["api_key"] = str(b.get("api_key") or "").strip()[:400]
+        c["api_key"] = chat.clean_key(c["provider"], b.get("api_key"))
     if "system" in b:
         c["system"] = str(b.get("system") or "")[:6000]
     if "export_dir" in b:

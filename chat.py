@@ -123,6 +123,36 @@ def config():
     return c
 
 
+KEY_SHAPES = {   # what each provider's keys start with - to catch a key pasted under the wrong provider
+    "anthropic": ("sk-ant-",), "openrouter": ("sk-or-",), "openai": ("sk-",),
+}
+KEY_NAMES = {"sk-ant-": "an Anthropic (Claude) key", "sk-or-": "an OpenRouter key"}
+
+
+def clean_key(provider, raw):
+    """A pasted key, tidied: copying from a web page or a phone often brings
+    a space, a line break, an invisible character, quotes or "Bearer " along
+    with it - any of which makes the provider refuse it."""
+    k = re.sub(r"[\s\u200b-\u200f\u2060\ufeff\u00ad]", "", str(raw or ""))
+    k = k.strip("\"'`<>")
+    k = re.sub(r"(?i)^(bearer|authorization:?)", "", k)[:400]
+    if not k:
+        return ""
+    want = KEY_SHAPES.get(provider)
+    if want and not k.startswith(want):
+        other = next((n for p, n in KEY_NAMES.items() if k.startswith(p)), None)
+        name = PROVIDERS[provider]["name"]
+        if other:
+            raise ValueError("That looks like %s, but the provider is set to %s. Pick the matching provider, "
+                             "or paste your %s key (it starts with %s)." % (other, name, name, want[0]))
+        raise ValueError("That doesn't look like a key from %s - those start with %s. Copy it again with the "
+                         "copy button on the key page." % (name, want[0]))
+    if provider == "openai" and k.startswith(("sk-ant-", "sk-or-")):
+        raise ValueError("That looks like %s, but the provider is set to OpenAI. Pick the matching provider."
+                         % KEY_NAMES["sk-ant-" if k.startswith("sk-ant-") else "sk-or-"])
+    return k
+
+
 def _base(c):
     b = (c.get("base_url") or PROVIDERS.get(c["provider"], {}).get("base") or "").rstrip("/")
     return b
@@ -178,7 +208,7 @@ def update(b):
     if "system" in b:
         c["system"] = str(b.get("system") or "")[:4000]
     if "api_key" in b:
-        c["api_key"] = str(b.get("api_key") or "").strip()[:400]
+        c["api_key"] = clean_key(c["provider"], b.get("api_key"))
     if isinstance(b.get("tools"), dict):
         for k, v in b["tools"].items():
             if k in TOOL_IDS:
@@ -214,8 +244,17 @@ def _open(url, body=None, headers=None, timeout=TIMEOUT, method=None):
             msg = msg or j.get("message") or str(e)
         except Exception:
             msg = str(e)
+        host = urllib.parse.urlparse(url).netloc
         if e.code in (401, 403):
-            msg = "The API key was refused (%s)" % msg
+            if not (headers or {}).get("Authorization") and not (headers or {}).get("x-api-key"):
+                msg = "There's no API key saved yet - paste it in Settings > Chatbox and press Save key"
+            elif "openrouter" in host and "user not found" in str(msg).lower():
+                msg = ("OpenRouter doesn't recognise this key (%s). It was probably deleted, or only part of it was "
+                       "copied - make a new one at openrouter.ai/keys and paste it again" % msg)
+            else:
+                msg = "The API key was refused (%s)" % msg
+        elif e.code == 402:
+            msg = "The account has run out of credit (%s) - add some on the provider's site" % msg
         raise RuntimeError(str(msg)[:300])
     except urllib.error.URLError as e:
         raise RuntimeError("Couldn't reach %s (%s)" % (urllib.parse.urlparse(url).netloc, e.reason))
@@ -246,7 +285,7 @@ def list_models(b=None, base_conf=None):
         if "base_url" in b:
             c["base_url"] = str(b.get("base_url") or "").strip().rstrip("/")
         if b.get("api_key"):
-            c["api_key"] = str(b["api_key"]).strip()
+            c["api_key"] = clean_key(c["provider"], b["api_key"])
     base = _base(c)
     if not base:
         raise ValueError("Enter the address first")
