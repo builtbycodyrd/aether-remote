@@ -2879,6 +2879,7 @@ async function fsPaste(text){
   kb.onclick = () => { fsq('fs').classList.add('dock'); fsDock(); };
   fsq('fsDockHide').onclick = () => { fsq('fsKeys').blur(); fsq('fs').classList.remove('dock'); };
   fsq('fsPadEdit').onclick = () => gpEdit(!GP.editing);
+  fsq('fsPadTouch').onclick = () => { GP.touchForced = true; gpTouch(fsq('fs').classList.contains('notouch')); fsBars(true); };
   fsq('fsPadMode').onclick = async () => {
     if (!GP.lay) return;
     if (GP.lay.mode === 'kbm' && GP.info && !GP.info.xbox){ fsToast('Xbox mode needs the ViGEmBus driver on the PC', 2400); return; }
@@ -6083,6 +6084,7 @@ async function openGame(){
   const fs = fsq('fs');
   fs.classList.add('game');
   GP.on = true; GP.editing = false; GP.sel = null; GP.act.clear(); GP.prev = ''; GP.seq = 0;
+  GP.physSeen = false; GP.touchForced = false; gpTouch(true);
   gpDraw();
   try {
     const j = await api('/api/pad');
@@ -6092,6 +6094,7 @@ async function openGame(){
     gpDraw();
     api('/api/pad/start', {}).then(r => { if (r.game && !r.focused) fsToast('Bring the game to the front on the PC if keys don\'t reach it', 2600); }).catch(() => {});
     fsToast(GP.game ? `Playing ${GP.game.title} - ${GP.lay.mode === 'xbox' ? 'as an Xbox controller' : 'with keyboard & mouse'}` : 'No game detected - the controller still works', 2400);
+    if (navigator.getGamepads) setTimeout(() => { if (GP.on && !GP.physSeen) fsToast('Got a Bluetooth controller paired to this phone? Press any button on it to use it.', 3200); }, 2700);
   } catch(err){ fsToast(err.message); GP.lay = gpDefault('kbm'); gpDraw(); }
   gpLoop();
 }
@@ -6207,6 +6210,7 @@ function gpState(dt){
       }
     }
   }
+  gpPhysical(st, press, keys, dt);
   if (xbox) st.buttons = [...press].sort(); else st.keys = [...keys].sort();
   return st;
 }
@@ -6240,6 +6244,7 @@ document.addEventListener('visibilitychange', () => {
 function gpEdit(on){
   GP.editing = on; GP.act.clear(); GP.sel = on ? GP.sel : null;
   fsq('fs').classList.toggle('gpedit', on);
+  if (on) fsq('fs').classList.remove('notouch');
   fsq('gpEdit').hidden = !on;
   if (on){ api('/api/pad/stop', {}).catch(() => {}); fsBars(false); }
   gpDraw(); gpEditPaint();
@@ -6311,3 +6316,81 @@ function gpEditPaint(){
     gpDraw(); gpEditPaint();
   });
 })();
+
+
+/* ---- a real controller, paired to the phone over Bluetooth ----
+   Xbox, PlayStation, Switch Pro, Backbone... anything the phone sees as a
+   gamepad. Its buttons and sticks go through exactly the same path as the
+   touch controls: as an Xbox controller on the PC, or mapped to keys with
+   the same per-game mapping you set for the on-screen buttons. When it's in
+   use, the touch controls step aside (Touch controls in the bar brings
+   them back). The phone only reports a controller after a button press. */
+const GP_STD = ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'back', 'start', 'ls', 'rs', 'up', 'down', 'left', 'right', 'guide'];
+function gpPads(){
+  try { return [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(p => p && p.connected); } catch(e){ return []; }
+}
+function gpPhysical(st, press, keys, dt){
+  const pads = gpPads();
+  if (!pads.length) return;
+  const lay = GP.lay, xbox = lay.mode === 'xbox';
+  const dz = v => Math.abs(v) < GP_DZ ? 0 : (v - Math.sign(v) * GP_DZ) / (1 - GP_DZ);
+  const byPad = id => lay.els.find(e => e.t === 'button' && e.pad === id);
+  const stickEl = side => lay.els.find(e => e.t === 'stick' && e.pad === side) || { kbm: side === 'right' ? 'mouse' : 'wasd' };
+  const dpadEl = lay.els.find(e => e.t === 'dpad') || { kbm: 'digits' };
+  let active = false;
+  for (const p of pads){
+    const std = p.mapping === 'standard';
+    const btn = i => { const b = p.buttons[i]; return b ? (b.pressed || b.value > .5) : false; };
+    const val = i => { const b = p.buttons[i]; return b ? b.value : 0; };
+    const ax = i => p.axes[i] || 0;
+    const sticks = { left: [dz(ax(0)), dz(ax(1))], right: [dz(ax(std ? 2 : 3)), dz(ax(std ? 3 : 4))] };
+    GP_STD.forEach((id, i) => {
+      if (!btn(i) && !(id === 'lt' || id === 'rt')) return;
+      if (id === 'lt' || id === 'rt'){ const v = val(i); if (v > .05){ active = true; if (xbox) st[id] = Math.max(st[id] || 0, v); else if (v > .5){ const e = byPad(id); if (e && e.key) keys.add(e.key); } } return; }
+      active = true;
+      if (xbox){ press.add(id); return; }
+      if (['up', 'down', 'left', 'right'].includes(id)){
+        const M = dpadEl.kbm === 'arrows' ? { up: 'up', down: 'down', left: 'left', right: 'right' }
+          : dpadEl.kbm === 'wasd' ? { up: 'w', down: 's', left: 'a', right: 'd' } : { up: '1', right: '2', down: '3', left: '4' };
+        keys.add(M[id]); return;
+      }
+      const e = byPad(id); if (e && e.key) keys.add(e.key);
+    });
+    for (const side of ['left', 'right']){
+      const [x, y] = sticks[side];
+      if (!x && !y) continue;
+      active = true;
+      if (xbox){ if (side === 'left'){ st.lx = Math.abs(x) > Math.abs(st.lx) ? x : st.lx; st.ly = Math.abs(y) > Math.abs(st.ly) ? y : st.ly; }
+        else { st.rx = Math.abs(x) > Math.abs(st.rx) ? x : st.rx; st.ry = Math.abs(y) > Math.abs(st.ry) ? y : st.ry; } continue; }
+      const el = stickEl(side);
+      if (el.kbm === 'mouse'){ GP.mx += x * 900 * lay.sens * dt; GP.my += y * 900 * lay.sens * dt; }
+      else if (el.kbm === 'wasd' || el.kbm === 'arrows'){
+        const K = el.kbm === 'wasd' ? ['w', 'a', 's', 'd'] : ['up', 'left', 'down', 'right'];
+        if (y < -.35) keys.add(K[0]); if (x < -.35) keys.add(K[1]); if (y > .35) keys.add(K[2]); if (x > .35) keys.add(K[3]);
+      }
+    }
+  }
+  if (active && !GP.physSeen){
+    GP.physSeen = true;
+    if (!GP.touchForced) gpTouch(false);
+    fsToast('Using your ' + gpPadName(pads[0]) + ' - touch controls hidden', 2400);
+  }
+}
+function gpPadName(p){
+  const id = String(p && p.id || 'controller');
+  if (/xbox|xinput|045e/i.test(id)) return 'Xbox controller';
+  if (/dualsense|dualshock|054c|wireless controller/i.test(id)) return 'PlayStation controller';
+  if (/pro controller|057e|joy-con/i.test(id)) return 'Switch controller';
+  if (/backbone/i.test(id)) return 'Backbone';
+  return 'controller';
+}
+function gpTouch(on){
+  fsq('fs').classList.toggle('notouch', !on);
+  const b = fsq('fsPadTouch'); if (b) b.textContent = on ? 'Hide touch controls' : 'Show touch controls';
+}
+window.addEventListener('gamepadconnected', e => {
+  if (GP.on) fsToast((gpPadName(e.gamepad)) + ' connected', 1600);
+});
+window.addEventListener('gamepaddisconnected', () => {
+  if (GP.on && !gpPads().length){ GP.physSeen = false; if (!GP.touchForced) gpTouch(true); fsToast('Controller disconnected - touch controls are back', 2000); }
+});

@@ -306,7 +306,9 @@
   }
   /* ---- game mode: the controller over the game ---- */
   #fs.game #fsDock,#fs.game #fsKb,#fs.game #fsRight{display:none}
-  #fsPadMode,#fsPadEdit{display:none}
+  #fsPadMode,#fsPadEdit,#fsPadTouch{display:none}
+  #fs.game #fsPadTouch{display:block}
+  #fs.notouch:not(.gpedit) #gp{display:none}
   #fs.game #fsPadMode,#fs.game #fsPadEdit{display:block}
   #gp{position:absolute;inset:0;z-index:3;pointer-events:none;--gpo:.55}
   #fs.game #gp{pointer-events:none}
@@ -1440,6 +1442,7 @@
     <button class="fsb" id="fsRight">Right click</button>
     <button class="fsb" id="fsPadMode"></button>
     <button class="fsb" id="fsPadEdit">Edit controls</button>
+    <button class="fsb" id="fsPadTouch">Hide touch controls</button>
     <span class="grow"></span>
     <span id="fsStat"></span>
   </div>

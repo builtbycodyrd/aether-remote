@@ -71,6 +71,7 @@ From then on your phone has a grid of tiles you arrange yourself:
   phone with a controller over it - a real virtual Xbox controller (with the
   free ViGEmBus driver) or keyboard & mouse for any game. Move, resize,
   hide and re-map every button; layouts are saved per game.
+  Or pair a real controller to your phone over Bluetooth and play with that.
 - **Notifications you choose.** Downloads finishing, Steam updates, a new
   phone signing in, the GPU running hot… each one Off, Quiet, Normal or
   Important, per phone.
