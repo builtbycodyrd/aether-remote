@@ -67,6 +67,10 @@ From then on your phone has a grid of tiles you arrange yourself:
   down how they did it - steps and pitfalls - and improve that note next
   time they hit a snag (Hermes Agent's learning loop, kept small and on your
   PC). Read or delete every skill on your phone; each is a Markdown file.
+- **Play PC games on your phone.** Tap the in-game card: the game fills the
+  phone with a controller over it - a real virtual Xbox controller (with the
+  free ViGEmBus driver) or keyboard & mouse for any game. Move, resize,
+  hide and re-map every button; layouts are saved per game.
 - **Notifications you choose.** Downloads finishing, Steam updates, a new
   phone signing in, the GPU running hot… each one Off, Quiet, Normal or
   Important, per phone.

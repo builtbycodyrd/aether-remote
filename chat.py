@@ -138,6 +138,9 @@ def clean_key(provider, raw):
     k = re.sub(r"(?i)^(bearer|authorization:?)", "", k)[:400]
     if not k:
         return ""
+    if "..." in k or "\u2026" in k or "***" in k:
+        raise ValueError("That's the shortened preview from the keys list, not the key itself. The full key is shown "
+                         "only once, right when you create it - make a new key and copy it from that window.")
     want = KEY_SHAPES.get(provider)
     if want and not k.startswith(want):
         other = next((n for p, n in KEY_NAMES.items() if k.startswith(p)), None)
@@ -150,6 +153,9 @@ def clean_key(provider, raw):
     if provider == "openai" and k.startswith(("sk-ant-", "sk-or-")):
         raise ValueError("That looks like %s, but the provider is set to OpenAI. Pick the matching provider."
                          % KEY_NAMES["sk-ant-" if k.startswith("sk-ant-") else "sk-or-"])
+    if len(k) < 30 and provider in KEY_SHAPES:
+        raise ValueError("That's too short to be a whole key - only part of it was copied. Copy it again with the "
+                         "copy button.")
     return k
 
 

@@ -80,3 +80,5 @@ forge/
 kiln.json
 # What the chat and Kiln learned (yours, not the repo's)
 skills/
+# Controller layouts (yours)
+controllers.json

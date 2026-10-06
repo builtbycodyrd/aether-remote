@@ -59,6 +59,7 @@ import memory         # noqa: E402
 import forge          # noqa: E402
 import kiln           # noqa: E402
 import skills         # noqa: E402
+import pad            # noqa: E402
 
 # Tests only: treat EVERY request as coming from a phone, so a browser on this
 # PC can exercise the Face ID / PIN lock. It can only make the server stricter
@@ -819,6 +820,13 @@ class Handler(BaseHTTPRequestHandler):
                     s = None
                 return self._send(200, s) if s else self._send(404, {"error": "No such skill"})
 
+            if path == "/api/pad":
+                # The phone controller: what this PC can do (a virtual Xbox
+                # controller, or keyboard + mouse), the game, its saved layout.
+                g = media.current_game()
+                name = qs.get("game", [""])[0] or (g or {}).get("title", "")
+                return self._send(200, dict(pad.PAD.info(), game=g, layout=pad.layout(name), gameKey=pad.game_key(name)))
+
             if path == "/api/kiln":
                 return self._send(200, dict(kiln.public(), projects=forge.listing() if kiln.config()["enabled"] else []))
 
@@ -1223,6 +1231,41 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/kiln/"):
                 return self._kiln_post(path, b)
 
+            if path == "/api/pad":
+                return self._send(200, pad.PAD.update(b))
+
+            if path == "/api/pad/start":
+                # Put the game in front, so the controller's input lands in it.
+                g = media.current_game()
+                hit = None
+                if g:
+                    want = re.sub(r"[^a-z0-9]", "", g.get("title", "").lower())
+                    for w in sysctl.running_windows():
+                        if want and (want in re.sub(r"[^a-z0-9]", "", w["title"].lower())
+                                     or want in re.sub(r"[^a-z0-9]", "", w["process"].lower())):
+                            hit = w
+                            break
+                if hit:
+                    try:
+                        sysctl.focus_window(hit["hwnd"])
+                    except Exception:
+                        pass
+                log("controller on (%s)" % ((g or {}).get("title") or "no game"))
+                return self._send(200, {"ok": True, "focused": bool(hit), "game": g})
+
+            if path == "/api/pad/stop":
+                pad.PAD.release()
+                return self._send(200, {"ok": True})
+
+            if path == "/api/pad/layout":
+                try:
+                    if b.get("reset"):
+                        pad.forget_layout(b.get("game"))
+                        return self._send(200, {"ok": True, "layout": pad.layout(b.get("game"))})
+                    return self._send(200, {"ok": True, "layout": pad.save_layout(b.get("game"), b.get("layout"))})
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
+
             if path == "/api/skills/delete":
                 try:
                     gone = skills.delete(str(b.get("scope", "")), str(b.get("name", "")))
@@ -1244,6 +1287,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, {"models": chat.list_models(b)})
                     return self._send(200, chat.test())
                 except (ValueError, RuntimeError) as e:
+                    log("chat %s failed (%s): %s" % (path.rsplit("/", 1)[-1], chat.config()["provider"], str(e)[:300]))
                     return self._send(400, {"error": str(e)})
 
             if path == "/api/jellyfin/connect":
@@ -2412,6 +2456,7 @@ class Handler(BaseHTTPRequestHandler):
                 log("kiln: Forge removed")
                 return self._send(200, kiln.public(local=True))
         except (ValueError, RuntimeError, OSError) as e:
+            log("kiln %s failed: %s" % (path.rsplit("/", 1)[-1], str(e)[:300]))
             return self._send(400, {"error": str(e)[:400]})
         return self._send(404, {"error": "no such path"})
 
@@ -2506,6 +2551,7 @@ class Handler(BaseHTTPRequestHandler):
         except ConnectionAbortedError:
             pass
         except Exception as e:
+            log("chat error (%s): %s" % (chat.config()["provider"], str(e)[:300]))
             try:
                 emit({"t": "error", "d": str(e)[:400]})
             except Exception:

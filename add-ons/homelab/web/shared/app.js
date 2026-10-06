@@ -661,7 +661,8 @@ const NPS = {
 function npBtns(n, which){
   if (n.kind === 'game') return `<div class="np-ctl"><button class="np-pill" data-npc="screen">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-    <span>Show the screen</span></button></div>`;
+    <span>Show the screen</span></button>
+    <button class="np-pill" data-npc="play">${XI.pad}<span>Play on phone</span></button></div>`;
   const can = npCan(n);
   const b = (op, icon, en, cls) => `<button class="np-b ${cls || ''}" data-npc="${op}"
     aria-label="${op === 'toggle' ? (n.playing ? 'Pause' : 'Play') : op === 'next' ? 'Next'
@@ -742,6 +743,7 @@ function npPaint(){
 
 async function npCmd(op, pos){
   if (op === 'screen'){ closeNowPlaying(); openDesktop({ ref: '0' }); return; }
+  if (op === 'play'){ closeNowPlaying(); openGame(); return; }
   if (op === 'back10' || op === 'fwd10'){
     const cur = S && S.nowplaying;
     if (!cur || !(cur.dur > 0)) return;
@@ -1205,7 +1207,7 @@ board.addEventListener('click', async e => {
   if (t.kind === 'nowplaying'){ openNowPlaying(); return; }
   if (t.kind === 'chat'){ if (CH.info && CH.info.ready) showTab('chat'); else toast('Set the chat up in the PC app → Settings → Chatbox'); return; }
   if (t.kind === 'windows'){ openWindows(); return; }
-  if (t.kind === 'gamestats'){ openDesktop({ ref: '0' }); return; }
+  if (t.kind === 'gamestats'){ openGame(); return; }
   if (t.kind === 'appvol'){
     const ic = e.target.closest('.mx-ic'), row = e.target.closest('[data-mxapp]');
     if (ic && row && row.dataset.mxapp){
@@ -2337,6 +2339,7 @@ function fsBars(show){
   const bar = fsq('fsBar');
   if (!bar) return;
   bar.classList.toggle('hide', !show);
+  fsq('fs').classList.toggle('barsup', !!show);
   clearTimeout(FS.barTimer);
   if (show) FS.barTimer = setTimeout(() => fsBars(false), 4000);
 }
@@ -2390,6 +2393,8 @@ function openDesktop(tile){
 
 function closeDesktop(){
   const fs = fsq('fs');
+  closeGame();
+  fs.classList.remove('dock');
   FS.on = false;
   fsStopFeed();
   fsq('fsKeys').blur();
@@ -2547,12 +2552,17 @@ function fsRing(px, py){
   let lastTap = 0, lastTapX = 0, lastTapY = 0;
 
   const onChrome = t => t.closest('#fsBar') || t.closest('#fsDock')
-                     || t.closest('#fsExit');
+                     || t.closest('#fsExit') || t.closest('#gp') || t.closest('#gpEdit')
+                     || t.closest('#fsKb');
 
   fs.addEventListener('pointerdown', e => {
     if (onChrome(e.target)) return;         // let the toolbars work normally
     // The toolbars auto-hide; the top strip is how you get them back.
     if (e.clientY < 50){ fsBars(true); return; }
+    // Playing with the controller: the picture is just to watch, unless
+    // "tap the screen to click" is on.
+    if (GP.on && GP.editing){ e.preventDefault(); fsq('gpEdit').classList.toggle('min'); return; }
+    if (GP.on && !(GP.lay && GP.lay.tapClick)){ e.preventDefault(); return; }
 
     e.preventDefault();
     pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
@@ -2862,6 +2872,23 @@ async function fsPaste(text){
   };
 
   fsq('fsEnter').onclick = fsEnterKey;
+  // Sideways, the keys and the typing box get out of the way - the picture
+  // fills the phone. This button (or the ▾ in the dock) brings them back.
+  const kb = fsq('fsKb');
+  kb.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
+  kb.onclick = () => { fsq('fs').classList.add('dock'); fsDock(); };
+  fsq('fsDockHide').onclick = () => { fsq('fsKeys').blur(); fsq('fs').classList.remove('dock'); };
+  fsq('fsPadEdit').onclick = () => gpEdit(!GP.editing);
+  fsq('fsPadMode').onclick = async () => {
+    if (!GP.lay) return;
+    if (GP.lay.mode === 'kbm' && GP.info && !GP.info.xbox){ fsToast('Xbox mode needs the ViGEmBus driver on the PC', 2400); return; }
+    GP.lay.mode = GP.lay.mode === 'xbox' ? 'kbm' : 'xbox';
+    gpDraw();
+    api('/api/pad/stop', {}).catch(() => {});
+    try { GP.lay = (await api('/api/pad/layout', { game: GP.key, layout: GP.lay })).layout; } catch(err){}
+    fsToast(GP.lay.mode === 'xbox' ? 'Now an Xbox controller' : 'Now keyboard & mouse', 1400);
+    fsBars(true);
+  };
   fsq('fsClipDone').onclick = () => { fsq('fsClip').hidden = true; };
   // Android's long-press menu ("Download image", "Copy") on the picture: no.
   fsq('fs').addEventListener('contextmenu', e => {
@@ -6010,3 +6037,277 @@ function sklPaint(){
           <button class="skl-del" data-skldel="${esc(k.name)}">Delete this skill</button>` : ''}</div>`; }).join('')
     : `<div class="kn-none" style="flex-direction:column;gap:10px">${XI.spark}<span>${SKL.scope === 'kiln' ? 'Kiln hasn\'t learned anything yet. It saves a how-to after builds that take real work.' : 'Nothing learned yet. It saves a how-to after tasks that take a few steps.'}</span></div>`;
 }
+
+/* ================= play on your phone: the on-screen controller =================
+   Tap the in-game card (or "Play on phone" in Now Playing): the game's screen
+   fills the phone, with a controller over it. Two ways in, per game:
+     Xbox      a virtual Xbox controller on the PC (needs ViGEmBus - many
+               controller tools already installed it). The game sees a pad.
+     Keyboard  buttons hold keys; a stick can be WASD, arrows or mouse-look.
+   Every control can be moved, resized, hidden and re-mapped (Edit controls),
+   saved per game on the PC so every phone gets the same layout.
+   The phone always sends its WHOLE state, and the PC lets go of everything
+   if the phone goes quiet - a dropped message can't leave a key held down. */
+const GP = { on: false, lay: null, info: null, game: null, key: '', act: new Map(), seq: 0,
+  sid: Math.random().toString(36).slice(2, 10), editing: false, sel: null, raf: 0, last: 0,
+  inflight: false, prev: '', sentAt: 0, mx: 0, my: 0, t: 0 };
+
+function gpDefault(mode){
+  return { mode: mode || 'kbm', opacity: .55, sens: 1, tapClick: false, els: [
+    { id: 'ls', t: 'stick', x: 14, y: 66, s: 30, pad: 'left', kbm: 'wasd' },
+    { id: 'rs', t: 'stick', x: 68, y: 78, s: 24, pad: 'right', kbm: 'mouse' },
+    { id: 'dp', t: 'dpad', x: 33, y: 84, s: 20, kbm: 'digits' },
+    { id: 'a', t: 'button', x: 88, y: 76, s: 12, pad: 'a', key: 'space', label: 'A' },
+    { id: 'b', t: 'button', x: 95.5, y: 60, s: 12, pad: 'b', key: 'c', label: 'B' },
+    { id: 'x', t: 'button', x: 80.5, y: 60, s: 12, pad: 'x', key: 'r', label: 'X' },
+    { id: 'y', t: 'button', x: 88, y: 44, s: 12, pad: 'y', key: 'f', label: 'Y' },
+    { id: 'lb', t: 'button', x: 8, y: 34, s: 11, pad: 'lb', key: 'q', label: 'LB' },
+    { id: 'rb', t: 'button', x: 92, y: 26, s: 11, pad: 'rb', key: 'e', label: 'RB' },
+    { id: 'lt', t: 'button', x: 8, y: 17, s: 11, pad: 'lt', key: 'rmb', label: 'LT' },
+    { id: 'rt', t: 'button', x: 80, y: 26, s: 11, pad: 'rt', key: 'lmb', label: 'RT' },
+    { id: 'l3', t: 'button', x: 24, y: 40, s: 9, pad: 'ls', key: 'shift', label: 'L3' },
+    { id: 'r3', t: 'button', x: 56, y: 62, s: 9, pad: 'rs', key: 'v', label: 'R3', hide: true },
+    { id: 'back', t: 'button', x: 43, y: 12, s: 8, pad: 'back', key: 'tab', label: '⧉' },
+    { id: 'start', t: 'button', x: 57, y: 12, s: 8, pad: 'start', key: 'esc', label: '≡' },
+  ]};
+}
+const GP_PADS = ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'ls', 'rs', 'back', 'start', 'up', 'down', 'left', 'right', 'guide'];
+const GP_PADNAME = { ls: 'L3 (left stick click)', rs: 'R3 (right stick click)', back: 'Back / View', start: 'Start / Menu', guide: 'Xbox button' };
+const GP_KEYNAME = { lmb: 'Left click', rmb: 'Right click', mmb: 'Middle click', space: 'Space', esc: 'Esc', enter: 'Enter',
+  tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', alt: 'Alt', up: '↑', down: '↓', left: '←', right: '→' };
+
+function gpEl(){ return fsq('gp'); }
+
+async function openGame(){
+  openDesktop({ ref: '0' });
+  const fs = fsq('fs');
+  fs.classList.add('game');
+  GP.on = true; GP.editing = false; GP.sel = null; GP.act.clear(); GP.prev = ''; GP.seq = 0;
+  gpDraw();
+  try {
+    const j = await api('/api/pad');
+    GP.info = j; GP.game = j.game; GP.key = (j.game && j.game.title) || '';
+    GP.lay = j.layout || gpDefault(j.xbox ? 'xbox' : 'kbm');
+    if (GP.lay.mode === 'xbox' && !j.xbox) GP.lay.mode = 'kbm';
+    gpDraw();
+    api('/api/pad/start', {}).then(r => { if (r.game && !r.focused) fsToast('Bring the game to the front on the PC if keys don\'t reach it', 2600); }).catch(() => {});
+    fsToast(GP.game ? `Playing ${GP.game.title} - ${GP.lay.mode === 'xbox' ? 'as an Xbox controller' : 'with keyboard & mouse'}` : 'No game detected - the controller still works', 2400);
+  } catch(err){ fsToast(err.message); GP.lay = gpDefault('kbm'); gpDraw(); }
+  gpLoop();
+}
+function closeGame(){
+  if (!GP.on) return;
+  GP.on = false; GP.act.clear();
+  cancelAnimationFrame(GP.raf); GP.raf = 0;
+  api('/api/pad/stop', {}).catch(() => {});
+  fsq('fs').classList.remove('game', 'gpedit');
+  const e = fsq('gpEdit'); if (e) e.hidden = true;
+  gpEl().innerHTML = '';
+}
+
+/* ---- drawing ---- */
+function gpDraw(){
+  const root = gpEl(); if (!root) return;
+  const lay = GP.lay;
+  fsq('fsPadMode').textContent = !lay ? '' : lay.mode === 'xbox' ? 'Xbox controller' : 'Keyboard & mouse';
+  if (!lay){ root.innerHTML = ''; return; }
+  root.style.setProperty('--gpo', GP.editing ? 1 : lay.opacity);
+  root.innerHTML = lay.els.filter(e => !e.hide || GP.editing).map(e => {
+    const lab = e.t === 'button' ? esc(lay.mode === 'kbm' && !e.label ? (GP_KEYNAME[e.key] || e.key || '?') : (e.label || e.pad || '')) : '';
+    const sub = GP.editing && lay.mode === 'kbm' ? `<small>${esc(e.t === 'button' ? (GP_KEYNAME[e.key] || e.key || 'none') : e.kbm)}</small>` : '';
+    const inner = e.t === 'stick' ? '<i class="gp-knob"></i>' : e.t === 'dpad'
+      ? '<i class="gp-dd u"></i><i class="gp-dd r"></i><i class="gp-dd d"></i><i class="gp-dd l"></i>' : `<b>${lab}</b>`;
+    return `<div class="gp-el gp-${e.t}${e.hide ? ' gp-hidden' : ''}${GP.sel === e.id ? ' sel' : ''}" data-gp="${esc(e.id)}"
+      style="left:${e.x}%;top:${e.y}%;--s:${e.s}vmin">${inner}${sub}</div>`;
+  }).join('');
+}
+
+/* ---- touch: every finger owns the control it landed on ---- */
+(function wireGp(){
+  const root = gpEl(); if (!root) return;
+  const find = id => GP.lay && GP.lay.els.find(e => e.id === id);
+  root.addEventListener('pointerdown', e => {
+    const node = e.target.closest('[data-gp]');
+    if (!node || !GP.lay) return;
+    e.preventDefault(); e.stopPropagation();
+    const el = find(node.dataset.gp);
+    try { node.setPointerCapture(e.pointerId); } catch(err){}
+    if (GP.editing){
+      GP.sel = el.id;
+      const r = root.getBoundingClientRect();
+      GP.drag = { id: e.pointerId, el, ox: e.clientX - (r.left + el.x / 100 * r.width), oy: e.clientY - (r.top + el.y / 100 * r.height) };
+      fsq('gpEdit').classList.remove('min');
+      gpDraw(); gpEditPaint();
+      fsq('fs').classList.add('gpdrag');
+      return;
+    }
+    const r = node.getBoundingClientRect();
+    GP.act.set(e.pointerId, { el, node, cx: r.left + r.width / 2, cy: r.top + r.height / 2, rad: r.width / 2, vx: 0, vy: 0 });
+    gpMove(e);
+    if (navigator.vibrate) navigator.vibrate(6);
+  });
+  const gpMove = e => {
+    if (GP.editing && GP.drag && GP.drag.id === e.pointerId){
+      const r = root.getBoundingClientRect(), el = GP.drag.el;
+      el.x = Math.max(2, Math.min(98, (e.clientX - GP.drag.ox - r.left) / r.width * 100));
+      el.y = Math.max(3, Math.min(97, (e.clientY - GP.drag.oy - r.top) / r.height * 100));
+      const n = root.querySelector(`[data-gp="${el.id}"]`); if (n){ n.style.left = el.x + '%'; n.style.top = el.y + '%'; }
+      return;
+    }
+    const a = GP.act.get(e.pointerId); if (!a) return;
+    let dx = (e.clientX - a.cx) / a.rad, dy = (e.clientY - a.cy) / a.rad;
+    const m = Math.hypot(dx, dy);
+    if (m > 1){ dx /= m; dy /= m; }
+    a.vx = dx; a.vy = dy;
+    if (a.el.t === 'stick'){ const k = a.node.querySelector('.gp-knob'); if (k) k.style.transform = `translate(${dx * 68}%,${dy * 68}%)`; }
+  };
+  root.addEventListener('pointermove', gpMove);
+  const up = e => {
+    if (GP.drag && GP.drag.id === e.pointerId){ GP.drag = null; fsq('fs').classList.remove('gpdrag'); gpEditPaint(); return; }
+    const a = GP.act.get(e.pointerId); if (!a) return;
+    GP.act.delete(e.pointerId);
+    if (a.el.t === 'stick'){ const k = a.node.querySelector('.gp-knob'); if (k) k.style.transform = ''; }
+  };
+  root.addEventListener('pointerup', up);
+  root.addEventListener('pointercancel', up);
+  root.addEventListener('lostpointercapture', up);
+})();
+
+/* ---- the state, 60 times a second; sent when it changes (and as a
+   heartbeat while anything is held, so the PC knows we're still here) ---- */
+const GP_DZ = .18;
+function gpState(dt){
+  const lay = GP.lay, xbox = lay.mode === 'xbox';
+  const st = xbox ? { mode: 'xbox', buttons: [], lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0 } : { mode: 'kbm', keys: [] };
+  const keys = new Set(), press = new Set();
+  for (const a of GP.act.values()){
+    a.node.classList.add('on');
+    const el = a.el;
+    if (el.t === 'button'){
+      if (xbox){ if (el.pad === 'lt') st.lt = 1; else if (el.pad === 'rt') st.rt = 1; else if (el.pad) press.add(el.pad); }
+      else if (el.key) keys.add(el.key);
+    } else if (el.t === 'stick'){
+      const m = Math.hypot(a.vx, a.vy), k = m < GP_DZ ? 0 : (m - GP_DZ) / (1 - GP_DZ) / (m || 1);
+      const x = a.vx * k, y = a.vy * k;
+      if (xbox){ if (el.pad === 'right'){ st.rx = x; st.ry = y; } else { st.lx = x; st.ly = y; } }
+      else if (el.kbm === 'mouse'){ GP.mx += x * 900 * lay.sens * dt; GP.my += y * 900 * lay.sens * dt; }
+      else if (el.kbm === 'wasd' || el.kbm === 'arrows'){
+        const K = el.kbm === 'wasd' ? ['w', 'a', 's', 'd'] : ['up', 'left', 'down', 'right'];
+        if (y < -.35) keys.add(K[0]); if (x < -.35) keys.add(K[1]); if (y > .35) keys.add(K[2]); if (x > .35) keys.add(K[3]);
+      }
+    } else if (el.t === 'dpad'){
+      const dirs = [];
+      if (a.vy < -.3) dirs.push('up'); if (a.vy > .3) dirs.push('down'); if (a.vx < -.3) dirs.push('left'); if (a.vx > .3) dirs.push('right');
+      a.node.dataset.dir = dirs.join(' ');
+      if (xbox) dirs.forEach(d => press.add(d));
+      else {
+        const M = el.kbm === 'arrows' ? { up: 'up', down: 'down', left: 'left', right: 'right' }
+          : el.kbm === 'wasd' ? { up: 'w', down: 's', left: 'a', right: 'd' } : { up: '1', right: '2', down: '3', left: '4' };
+        dirs.forEach(d => keys.add(M[d]));
+      }
+    }
+  }
+  if (xbox) st.buttons = [...press].sort(); else st.keys = [...keys].sort();
+  return st;
+}
+function gpLoop(){
+  const step = ts => {
+    if (!GP.on) return;
+    GP.raf = requestAnimationFrame(step);
+    const dt = GP.t ? Math.min(.05, (ts - GP.t) / 1000) : .016; GP.t = ts;
+    gpEl().querySelectorAll('.gp-el.on').forEach(n => { if (![...GP.act.values()].some(a => a.node === n)) { n.classList.remove('on'); delete n.dataset.dir; } });
+    if (!GP.lay || GP.editing) return;
+    const st = gpState(dt), sig = JSON.stringify(st);
+    const busy = sig !== JSON.stringify(st.mode === 'xbox' ? { mode: 'xbox', buttons: [], lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0 } : { mode: 'kbm', keys: [] });
+    const mx = Math.trunc(GP.mx), my = Math.trunc(GP.my);
+    const due = sig !== GP.prev || mx || my || (busy && ts - GP.sentAt > 300);
+    if (!due || GP.inflight) return;
+    GP.mx -= mx; GP.my -= my;
+    GP.prev = sig; GP.sentAt = ts; GP.inflight = true;
+    fetch('/api/pad', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign(st, { seq: ++GP.seq, sid: GP.sid, mx, my })) })
+      .then(r => r.json()).then(j => { if (j && j.ok === false && j.error) fsToast(j.error, 2500); })
+      .catch(() => {}).finally(() => { GP.inflight = false; });
+  };
+  cancelAnimationFrame(GP.raf);
+  GP.raf = requestAnimationFrame(step);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && GP.on){ GP.act.clear(); api('/api/pad/stop', {}).catch(() => {}); }
+});
+
+/* ---- editing: drag to move, then pick size and what it does ---- */
+function gpEdit(on){
+  GP.editing = on; GP.act.clear(); GP.sel = on ? GP.sel : null;
+  fsq('fs').classList.toggle('gpedit', on);
+  fsq('gpEdit').hidden = !on;
+  if (on){ api('/api/pad/stop', {}).catch(() => {}); fsBars(false); }
+  gpDraw(); gpEditPaint();
+}
+function gpEditPaint(){
+  const box = fsq('gpEdit'); if (!box || !GP.editing) return;
+  const lay = GP.lay, el = lay.els.find(e => e.id === GP.sel), xbox = lay.mode === 'xbox', keys = (GP.info && GP.info.keys) || [];
+  // The panel sits on the half of the screen away from the control you're
+  // working on, so it never covers it.
+  box.classList.toggle('top', !!el && el.y > 50);
+  const keyOpts = cur => ['<option value="">Nothing</option>'].concat(keys.map(k => `<option value="${esc(k)}" ${k === cur ? 'selected' : ''}>${esc(GP_KEYNAME[k] || k.toUpperCase())}</option>`)).join('');
+  const padOpts = cur => GP_PADS.map(p => `<option value="${p}" ${p === cur ? 'selected' : ''}>${esc(GP_PADNAME[p] || p.toUpperCase())}</option>`).join('');
+  box.innerHTML = `<div class="gpe-row"><b>Edit controls</b><span class="grow"></span>
+      <button class="fsb" data-gpe="reset">Reset</button><button class="fsb on" data-gpe="done">Done</button></div>
+    ${el ? `<div class="gpe-row"><span class="gpe-l">${esc(el.label || el.t)}</span>
+      <label class="gpe-f">Size<input type="range" min="6" max="40" step="1" value="${el.s}" data-gpe="size"></label>
+      ${el.t === 'button' ? (xbox ? `<select class="fsb" data-gpe="pad">${padOpts(el.pad)}</select>` : `<select class="fsb" data-gpe="key">${keyOpts(el.key)}</select>`)
+        : el.t === 'stick' ? (xbox ? `<select class="fsb" data-gpe="spad"><option value="left" ${el.pad === 'left' ? 'selected' : ''}>Left stick</option><option value="right" ${el.pad === 'right' ? 'selected' : ''}>Right stick</option></select>`
+          : `<select class="fsb" data-gpe="kbm"><option value="wasd" ${el.kbm === 'wasd' ? 'selected' : ''}>WASD</option><option value="arrows" ${el.kbm === 'arrows' ? 'selected' : ''}>Arrow keys</option><option value="mouse" ${el.kbm === 'mouse' ? 'selected' : ''}>Mouse look</option><option value="none" ${el.kbm === 'none' ? 'selected' : ''}>Nothing</option></select>`)
+        : (xbox ? '' : `<select class="fsb" data-gpe="dkbm"><option value="digits" ${el.kbm === 'digits' ? 'selected' : ''}>1 2 3 4</option><option value="arrows" ${el.kbm === 'arrows' ? 'selected' : ''}>Arrow keys</option><option value="wasd" ${el.kbm === 'wasd' ? 'selected' : ''}>WASD</option></select>`)}
+      ${el.t === 'button' ? `<input class="gpe-lab" maxlength="6" placeholder="Label" value="${esc(el.label || '')}" data-gpe="label">` : ''}
+      <button class="fsb" data-gpe="hide">${el.hide ? 'Show it' : 'Hide it'}</button></div>`
+    : '<div class="gpe-row gpe-hint">Drag a control to move it, tap one to resize or re-map it. Tap empty space to tuck this panel away.</div>'}
+    <div class="gpe-row"><span class="gpe-l">Controller</span>
+      <button class="fsb ${xbox ? 'on' : ''}" data-gpe="mode" data-v="xbox" ${GP.info && !GP.info.xbox ? 'disabled' : ''}>Xbox</button>
+      <button class="fsb ${!xbox ? 'on' : ''}" data-gpe="mode" data-v="kbm">Keyboard &amp; mouse</button>
+      <label class="gpe-f">See-through<input type="range" min="15" max="100" value="${Math.round(lay.opacity * 100)}" data-gpe="opacity"></label>
+      ${!xbox ? `<label class="gpe-f">Look speed<input type="range" min="20" max="400" value="${Math.round(lay.sens * 100)}" data-gpe="sens"></label>` : ''}
+      <label class="gpe-f"><input type="checkbox" ${lay.tapClick ? 'checked' : ''} data-gpe="tap">Tap the screen to click</label></div>
+    ${GP.info && !GP.info.xbox ? '<div class="gpe-row gpe-hint">Xbox mode needs the free ViGEmBus driver on the PC (github.com/nefarius/ViGEmBus).</div>' : ''}`;
+}
+(function wireGpEdit(){
+  const box = fsq('gpEdit'); if (!box) return;
+  box.addEventListener('pointerdown', e => e.stopPropagation());
+  const el = () => GP.lay.els.find(e => e.id === GP.sel);
+  box.addEventListener('input', e => {
+    const a = e.target.dataset.gpe;
+    if (a === 'size' && el()){ el().s = +e.target.value; gpDraw(); }
+    if (a === 'opacity') GP.lay.opacity = e.target.value / 100;
+    if (a === 'sens') GP.lay.sens = e.target.value / 100;
+    if (a === 'label' && el()){ el().label = e.target.value; gpDraw(); }
+  });
+  box.addEventListener('change', e => {
+    const a = e.target.dataset.gpe, x = el();
+    if (a === 'key' && x) x.key = e.target.value;
+    if (a === 'pad' && x) x.pad = e.target.value;
+    if (a === 'spad' && x) x.pad = e.target.value;
+    if ((a === 'kbm' || a === 'dkbm') && x) x.kbm = e.target.value;
+    if (a === 'tap') GP.lay.tapClick = e.target.checked;
+    gpDraw(); gpEditPaint();
+  });
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('[data-gpe]'); if (!b || b.tagName === 'INPUT' || b.tagName === 'SELECT') return;
+    const a = b.dataset.gpe;
+    if (a === 'hide' && el()){ el().hide = !el().hide; }
+    if (a === 'mode'){ GP.lay.mode = b.dataset.v; }
+    if (a === 'reset'){
+      if (!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Sure?'; return; }
+      try { const r = await api('/api/pad/layout', { game: GP.key, reset: true }); GP.lay = r.layout && GP.key ? r.layout : gpDefault(GP.lay.mode); } catch(err){ GP.lay = gpDefault(GP.lay.mode); }
+      if (!GP.key || !GP.lay) GP.lay = gpDefault(GP.lay ? GP.lay.mode : 'kbm');
+      GP.sel = null;
+    }
+    if (a === 'done'){
+      try { const r = await api('/api/pad/layout', { game: GP.key, layout: GP.lay }); GP.lay = r.layout;
+        fsToast(GP.key ? 'Saved for ' + GP.key : 'Saved as your default layout', 1600); }
+      catch(err){ fsToast(err.message); }
+      return gpEdit(false);
+    }
+    gpDraw(); gpEditPaint();
+  });
+})();

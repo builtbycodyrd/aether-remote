@@ -30,13 +30,20 @@ if os.path.isdir(static):
         if os.path.isfile(p):
             datas.append((p, "static"))
 
+# The virtual Xbox controller's client library (MIT, from ViGEm) - the
+# phone controller uses it when the ViGEmBus driver is installed.
+vigem = os.path.join(HERE, "vendor", "vigem")
+if os.path.isdir(vigem):
+    for name in sorted(os.listdir(vigem)):
+        datas.append((os.path.join(vigem, name), os.path.join("vendor", "vigem")))
+
 # launch.py imports these inside functions; name them so the analysis cannot
 # miss one and produce an exe that works in three of its four modes.
 hiddenimports = [
     "paths", "remote", "tray", "supervise",
     "auth", "layout", "library", "icons", "stream", "sysctl",
     "update", "wol", "tls", "secondfactor", "webauthn", "media", "files", "games", "jellyfin",
-    "mixer", "timer", "push", "watch", "chat", "memory", "browser", "forge", "kiln", "skills",
+    "mixer", "timer", "push", "watch", "chat", "memory", "browser", "forge", "kiln", "skills", "pad",
     # Web Push (notifications): encryption + VAPID signing
     "cryptography.hazmat.primitives.ciphers.aead",
     "cryptography.hazmat.primitives.asymmetric.utils",

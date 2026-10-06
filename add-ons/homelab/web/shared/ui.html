@@ -285,6 +285,71 @@
   #fsClip textarea{width:100%;background:#05060e;color:var(--text);border:1px solid var(--line2);
     border-radius:10px;padding:10px;font:inherit;font-size:14px;-webkit-user-select:text;user-select:text}
   #fsClip .fsb{align-self:flex-end}
+
+  /* ---- sideways: the picture gets the whole phone ----
+     Landscape on a phone is ~390px tall; the keys and typing box covered a
+     third of the screen and sat on top of what you were trying to tap. Now
+     they slide away, and come back from the small keyboard button. The way
+     out shrinks to a corner button that stays visible. */
+  #fsKb{display:none;position:absolute;z-index:5;right:calc(10px + env(safe-area-inset-right));bottom:calc(10px + env(safe-area-inset-bottom));
+    width:42px;height:42px;border-radius:50%;border:1px solid var(--line2);background:rgba(8,7,20,.55);color:var(--text);
+    align-items:center;justify-content:center;backdrop-filter:blur(8px);opacity:.75;cursor:pointer}
+  #fsDockHide{display:none}
+  @media (orientation:landscape) and (max-height:540px){
+    #fs:not(.dock) #fsDock{transform:translateY(115%);opacity:0;pointer-events:none}
+    #fsDock{transition:transform .25s ease,opacity .2s,bottom .18s ease-out}
+    #fs:not(.dock):not(.game) #fsKb{display:flex}
+    #fs.dock #fsDockHide{display:block}
+    #fsExit{top:calc(6px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));padding:7px 9px;font-size:0;gap:0;opacity:.7}
+    #fs.barsup #fsExit{font-size:13px;gap:7px;padding:8px 12px;opacity:1}
+    #fsBar{padding-left:calc(12px + env(safe-area-inset-left))}
+  }
+  /* ---- game mode: the controller over the game ---- */
+  #fs.game #fsDock,#fs.game #fsKb,#fs.game #fsRight{display:none}
+  #fsPadMode,#fsPadEdit{display:none}
+  #fs.game #fsPadMode,#fs.game #fsPadEdit{display:block}
+  #gp{position:absolute;inset:0;z-index:3;pointer-events:none;--gpo:.55}
+  #fs.game #gp{pointer-events:none}
+  .gp-el{position:absolute;width:var(--s);height:var(--s);transform:translate(-50%,-50%);pointer-events:auto;touch-action:none;
+    border-radius:50%;display:flex;align-items:center;justify-content:center;flex-direction:column;opacity:var(--gpo);
+    background:radial-gradient(circle at 50% 35%,rgba(255,255,255,.16),rgba(8,7,20,.42));
+    border:1.5px solid color-mix(in srgb,var(--primary) 55%,rgba(255,255,255,.35));
+    box-shadow:0 0 0 1px rgba(0,0,0,.25),inset 0 0 calc(var(--s) * .3) color-mix(in srgb,var(--primary) 18%,transparent);
+    color:#fff;transition:transform .06s,background .08s}
+  .gp-el b{font-size:calc(var(--s) * .3);font-weight:700;letter-spacing:.3px;text-shadow:0 1px 3px rgba(0,0,0,.6);pointer-events:none}
+  .gp-el small{font-size:10px;opacity:.85;pointer-events:none;margin-top:1px}
+  .gp-button.on{background:radial-gradient(circle,color-mix(in srgb,var(--primary) 75%,#fff),var(--primary));transform:translate(-50%,-50%) scale(.92);
+    box-shadow:0 0 18px var(--primary)}
+  .gp-stick{background:radial-gradient(circle,rgba(8,7,20,.25),rgba(8,7,20,.5))}
+  .gp-knob{width:calc(var(--s) * .46);height:calc(var(--s) * .46);flex:none;border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle at 45% 35%,color-mix(in srgb,var(--primary) 60%,#fff),var(--primary));
+    box-shadow:0 2px 10px rgba(0,0,0,.45),0 0 14px color-mix(in srgb,var(--primary) 50%,transparent);transition:transform .05s}
+  .gp-stick.on .gp-knob{transition:none}
+  .gp-dpad{border-radius:22%;background:rgba(8,7,20,.4)}
+  .gp-dd{position:absolute;width:calc(var(--s) * .3);height:calc(var(--s) * .3);border-radius:6px;background:rgba(255,255,255,.18);pointer-events:none}
+  .gp-dd.u{top:6%;left:35%}.gp-dd.d{bottom:6%;left:35%}.gp-dd.l{left:6%;top:35%}.gp-dd.r{right:6%;top:35%}
+  .gp-dpad[data-dir~="up"] .gp-dd.u,.gp-dpad[data-dir~="down"] .gp-dd.d,.gp-dpad[data-dir~="left"] .gp-dd.l,.gp-dpad[data-dir~="right"] .gp-dd.r{background:var(--primary)}
+  #fs.gpedit .gp-el{opacity:1;border-style:dashed;cursor:move}
+  #fs.gpedit .gp-el.sel{border-color:var(--secondary);box-shadow:0 0 0 3px color-mix(in srgb,var(--secondary) 35%,transparent)}
+  .gp-el.gp-hidden{opacity:.3 !important}
+  #gpEdit{position:absolute;z-index:7;left:50%;transform:translateX(-50%);bottom:calc(8px + env(safe-area-inset-bottom));
+    width:min(720px,calc(100% - 20px));max-height:46%;overflow-y:auto;background:rgba(8,7,20,.9);border:1px solid var(--line2);
+    border-radius:14px;padding:8px 10px;backdrop-filter:blur(12px);touch-action:auto;font-size:12.5px;color:var(--text)}
+  #gpEdit.top{bottom:auto;top:calc(8px + env(safe-area-inset-top))}
+  #fs.gpdrag #gpEdit{opacity:.15;pointer-events:none}
+  #gpEdit.min{transform:translate(-50%,calc(100% - 34px));opacity:.6}
+  #gpEdit.top.min{transform:translate(-50%,calc(-100% + 34px))}
+  #gpEdit{transition:opacity .15s,transform .25s}
+  #gpEdit{transition:opacity .15s}
+  @media (orientation:landscape) and (max-height:540px){#gpEdit{width:min(620px,calc(100% - 180px));max-height:52%}}
+  #gpEdit[hidden]{display:none}
+  .gpe-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:4px 0}
+  .gpe-l{font-weight:650;min-width:56px}
+  .gpe-f{display:flex;align-items:center;gap:6px;color:var(--muted)}
+  .gpe-f input[type=range]{width:110px}
+  .gpe-hint{color:var(--muted)}
+  .gpe-lab{width:64px;background:rgba(8,7,20,.85);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:6px 8px;font:inherit}
+  #gpEdit .fsb[disabled]{opacity:.4}
   .fsb.key.clip{border-color:color-mix(in srgb,var(--secondary) 45%,var(--line2))}
 
   /* stat tile */
@@ -1373,6 +1438,8 @@
       <option value="high">High</option>
     </select>
     <button class="fsb" id="fsRight">Right click</button>
+    <button class="fsb" id="fsPadMode"></button>
+    <button class="fsb" id="fsPadEdit">Edit controls</button>
     <span class="grow"></span>
     <span id="fsStat"></span>
   </div>
@@ -1380,6 +1447,7 @@
   <div id="fsDock">
     <!-- Everything an iPhone keyboard has no key for. -->
     <div id="fsKeysBar">
+      <button class="fsb key" id="fsDockHide" aria-label="Hide the keys">&#9662;</button>
       <button class="fsb key" data-press="esc">Esc</button>
       <button class="fsb key" data-press="tab">Tab</button>
       <!-- Copy/Paste move text between THIS phone and the PC, like copying
@@ -1406,6 +1474,14 @@
       <button class="fsb" id="fsEnter">Enter</button>
     </div>
   </div>
+
+  <!-- Sideways, the dock hides so the picture fills the phone; this brings it back. -->
+  <button id="fsKb" aria-label="Keyboard and keys">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7.5 14h9"/></svg>
+  </button>
+  <!-- The on-screen controller (game mode) and its editor. -->
+  <div id="gp"></div>
+  <div id="gpEdit" hidden></div>
 
   <div id="fsToast"></div>
   <!-- Only when the browser won't let us write the phone's clipboard (plain
